@@ -1,0 +1,92 @@
+[package]
+name = "broadcast-manager"
+version = "0.1.0"
+description = "广播服务管理器 - 全功能桌面管理应用（内嵌广播服务）"
+authors = ["ycq"]
+edition = "2021"
+
+[lib]
+name = "broadcast_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+default = ["opus"]
+# Opus 编解码支持（需要系统安装 libopus）
+opus = ["dep:opus"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# Tauri 框架
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-autostart = "2"
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# Web 框架（内嵌广播服务）
+axum = { version = "0.7", features = ["ws", "macros"] }
+axum-extra = { version = "0.9", features = ["typed-header"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs", "cors"] }
+
+# 音频处理
+cpal = "0.15"
+rodio = { version = "0.19", default-features = false, features = ["mp3", "wav", "flac", "vorbis"] }
+symphonia = { version = "0.5", features = ["mp3", "wav", "flac", "vorbis"] }
+lofty = "0.21"
+
+# Opus 支持（可选）
+opus = { version = "0.3", optional = true }
+
+# 线程通信
+crossbeam-channel = "0.5"
+parking_lot = "0.12"
+
+# 序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 日志
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# 配置
+config = "0.14"
+dirs = "5.0"
+toml = "0.8"
+
+# 错误处理
+anyhow = "1"
+thiserror = "1"
+
+# HTTP 客户端（用于前端 API 调用）
+reqwest = { version = "0.11", features = ["json"] }
+
+# 其他工具
+futures = "0.3"
+bytes = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+walkdir = "2"
+
+# 平台特定依赖
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Media_Audio",
+    "Win32_System_Com",
+    "Win32_Foundation",
+] }
+
+[profile.dev]
+incremental = true
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
