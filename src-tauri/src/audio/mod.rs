@@ -14,17 +14,8 @@ pub mod metadata;
 pub mod mixer;
 pub mod playlist;
 
-// 从 actor 模块重导出（推荐使用）
-pub use actor::{AudioActor, AudioMessage, AudioState, PlaybackProgress, PlaylistItemDto};
+// 从 actor 模块重导出
+pub use actor::{AudioActor, AudioMessage, AudioState, PlaybackProgress, PlaylistItemDto, MixerControl};
 
-// 从 actor 模块导出 MixerControl（供 mixer 模块使用）
-pub use actor::MixerControl;
-
-// 从 engine 模块重导出
-pub use engine::{BroadcastEngine, BroadcastStatus, DuckingConfig, MusicEngine, MusicState, MusicStatus};
-
-// 从 mixer 模块重导出
-pub use mixer::{AudioMixer, MixerState};
-
-// 从 decoder 模块重导出
-pub use decoder::OpusDecoderEngine;
+// 从 actor 模块导出广播消费者
+pub use actor::{broadcast_consumer, broadcast_sample_rate};

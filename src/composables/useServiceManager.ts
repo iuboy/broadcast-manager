@@ -15,8 +15,6 @@ interface ServiceStatus {
   status: ServiceState
   state: string
   port: number
-  ws_port: number
-  http_port: number
   error: string | null
 }
 
@@ -25,9 +23,7 @@ export function useServiceManager() {
   const status = ref<ServiceStatus>({
     status: 'running',
     state: 'running',
-    port: 8080,
-    ws_port: 8080,
-    http_port: 8081,
+    port: 8081,
     error: null,
   })
 
@@ -49,9 +45,7 @@ export function useServiceManager() {
       status.value = {
         status: 'running', // 默认为运行
         state: 'running',
-        port: 8080,
-        ws_port: 8080,
-        http_port: 8081,
+        port: 8081,
         error: null,
       }
       return status.value
@@ -70,9 +64,7 @@ export function useServiceManager() {
       status.value = {
         status: 'error',
         state: 'error',
-        port: 8080,
-        ws_port: 8080,
-        http_port: 8081,
+        port: 8081,
         error: error instanceof Error ? error.message : String(error),
       }
       return status.value

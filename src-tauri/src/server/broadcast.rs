@@ -4,12 +4,15 @@ use std::time::{Duration, Instant};
 use uuid::Uuid;
 
 /// 会话超时时间（秒）
+#[allow(dead_code)]
 const SESSION_TIMEOUT_SECS: u64 = 300; // 5 分钟
 
 /// 广播客户端信息
 #[derive(Debug, Clone)]
 pub struct BroadcastClient {
+    #[allow(dead_code)]
     pub id: String,
+    #[allow(dead_code)]
     pub connected_at: Instant,
     pub last_activity: Instant,
     pub session_token: String,
@@ -87,6 +90,7 @@ impl BroadcastManager {
     }
 
     /// 客户端重连（使用之前的会话）
+    #[allow(dead_code)]
     pub fn reconnect_client(&self, session_token: &str) -> Result<String, String> {
         // 清理过期会话
         self.cleanup_expired_sessions();
@@ -179,6 +183,7 @@ impl BroadcastManager {
     }
 
     /// 清理过期会话
+    #[allow(dead_code)]
     pub fn cleanup_expired_sessions(&self) {
         let mut cache = self.session_cache.write();
         let now = Instant::now();
@@ -190,6 +195,7 @@ impl BroadcastManager {
     }
 
     /// 获取会话令牌（用于客户端保存以便重连）
+    #[allow(dead_code)]
     pub fn get_session_token(&self, client_id: &str) -> Option<String> {
         let clients = self.clients.read();
         clients.get(client_id).map(|c| c.session_token.clone())
@@ -197,22 +203,27 @@ impl BroadcastManager {
 
     /// 请求开始广播
     pub fn request_broadcast(&self, client_id: &str) -> Result<(), String> {
-        let state = self.state.read();
-        if *state == BroadcastState::Broadcasting {
-            let broadcaster = self.current_broadcaster.read();
-            return Err(format!(
-                "已有客户端正在广播: {}",
-                broadcaster.as_deref().unwrap_or("unknown")
-            ));
-        }
+        // 先检查是否正在广播
+        {
+            let state = self.state.read();
+            if *state == BroadcastState::Broadcasting {
+                let broadcaster = self.current_broadcaster.read();
+                return Err(format!(
+                    "已有客户端正在广播: {}",
+                    broadcaster.as_deref().unwrap_or("unknown")
+                ));
+            }
+        } // 读锁在这里释放
 
         // 验证客户端存在
-        let clients = self.clients.read();
-        if !clients.contains_key(client_id) {
-            return Err("客户端不存在".to_string());
-        }
+        {
+            let clients = self.clients.read();
+            if !clients.contains_key(client_id) {
+                return Err("客户端不存在".to_string());
+            }
+        } // 读锁在这里释放
 
-        // 开始广播
+        // 开始广播（获取写锁）
         *self.state.write() = BroadcastState::Broadcasting;
         *self.current_broadcaster.write() = Some(client_id.to_string());
         *self.broadcast_start.write() = Some(Instant::now());
@@ -223,8 +234,11 @@ impl BroadcastManager {
 
     /// 结束广播
     pub fn end_broadcast(&self, client_id: &str) {
-        let broadcaster = self.current_broadcaster.read();
-        if broadcaster.as_deref() == Some(client_id) {
+        // 先检查是否是广播者（使用读锁）
+        let is_broadcaster = self.is_broadcaster(client_id);
+
+        if is_broadcaster {
+            // 释放读锁后再获取写锁
             *self.state.write() = BroadcastState::Idle;
             *self.current_broadcaster.write() = None;
             *self.broadcast_start.write() = None;
@@ -233,6 +247,7 @@ impl BroadcastManager {
     }
 
     /// 获取当前状态
+    #[allow(dead_code)]
     pub fn state(&self) -> BroadcastState {
         *self.state.read()
     }
@@ -248,12 +263,14 @@ impl BroadcastManager {
     }
 
     /// 获取广播持续时间（秒）
+    #[allow(dead_code)]
     pub fn broadcast_duration_secs(&self) -> Option<f64> {
         let start = self.broadcast_start.read();
         start.map(|s| s.elapsed().as_secs_f64())
     }
 
     /// 获取客户端数量
+    #[allow(dead_code)]
     pub fn client_count(&self) -> usize {
         self.clients.read().len()
     }
@@ -267,11 +284,13 @@ impl BroadcastManager {
     }
 
     /// 获取所有客户端 ID
+    #[allow(dead_code)]
     pub fn get_client_ids(&self) -> Vec<String> {
         self.clients.read().keys().cloned().collect()
     }
 
     /// 检查客户端是否存在
+    #[allow(dead_code)]
     pub fn has_client(&self, client_id: &str) -> bool {
         self.clients.read().contains_key(client_id)
     }

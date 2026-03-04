@@ -102,6 +102,7 @@ fn get_audio_duration_by_decoding(path: &Path) -> Option<f64> {
 }
 
 /// 获取音频文件时长（Duration）
+#[allow(dead_code)]
 pub fn get_audio_duration_as_duration(path: &Path) -> Option<Duration> {
     let seconds = get_audio_duration(path)?;
     let secs = seconds as u64;

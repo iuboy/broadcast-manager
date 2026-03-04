@@ -7,7 +7,6 @@
 use axum::{
     body::Body,
     http::{Request, StatusCode},
-    middleware::Next,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -15,6 +14,7 @@ use std::net::IpAddr;
 
 /// API 访问级别
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum AccessLevel {
     /// 公开访问，无需验证
     Public,
@@ -24,6 +24,7 @@ pub enum AccessLevel {
 
 /// 认证配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct AuthConfig {
     /// 本地 IP 地址列表（用于识别本地请求）
     pub local_addresses: Vec<String>,
@@ -75,6 +76,7 @@ impl AuthConfig {
 }
 
 /// 根据路径获取访问级别
+#[allow(dead_code)]
 pub fn get_access_level(path: &str) -> AccessLevel {
     // WebSocket 端点 - 公开
     if path == "/ws" {
@@ -96,6 +98,7 @@ pub fn get_access_level(path: &str) -> AccessLevel {
 }
 
 /// 验证请求是否满足访问级别要求
+#[allow(dead_code)]
 pub fn validate_request(
     req: &Request<Body>,
     auth_config: &AuthConfig,
@@ -131,6 +134,7 @@ pub fn validate_request(
 }
 
 /// 从请求中获取客户端地址
+#[allow(dead_code)]
 fn get_client_address(req: &Request<Body>) -> Option<String> {
     // 1. 尝试从扩展中获取（由 Axum 的 ConnectInfo 添加）
     if let Some(addr) = req.extensions().get::<std::net::SocketAddr>() {
@@ -159,6 +163,7 @@ fn get_client_address(req: &Request<Body>) -> Option<String> {
 
 /// 认证错误
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum AuthError {
     /// 需要 API Key
     ApiKeyRequired,

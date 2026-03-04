@@ -20,24 +20,14 @@
           <span class="form-tip">服务器监听的网络接口</span>
         </el-form-item>
 
-        <el-form-item label="WebSocket 端口">
+        <el-form-item label="服务端口">
           <el-input-number
-            v-model="serverConfig.ws_port"
+            v-model="serverConfig.port"
             :min="1024"
             :max="65535"
             :step="1"
           />
-          <span class="form-tip">用于 WebSocket 连接</span>
-        </el-form-item>
-
-        <el-form-item label="HTTP API 端口">
-          <el-input-number
-            v-model="serverConfig.http_port"
-            :min="1024"
-            :max="65535"
-            :step="1"
-          />
-          <span class="form-tip">用于 HTTP API 访问</span>
+          <span class="form-tip">WebSocket 和 HTTP API 共同使用此端口</span>
         </el-form-item>
 
         <el-form-item label="最大连接数">
@@ -126,8 +116,7 @@ import { tauriClient, type ServerConfig } from '../composables/useTauriCommands'
 // 服务器配置
 const serverConfig = reactive<ServerConfig>({
   bind_address: '0.0.0.0',
-  ws_port: 8080,
-  http_port: 8081,
+  port: 8081,
   max_connections: 10,
 })
 

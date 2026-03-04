@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "广播服务管理器",
+  "productName": "BroadcastManager",
   "version": "0.1.0",
   "identifier": "app.iamm.broadcast-manager",
   "build": {
@@ -34,12 +34,25 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "publisher": "iamm",
+    "copyright": "Copyright © 2025",
+    "category": "Developer Tool",
+    "shortDescription": "广播服务管理器",
+    "longDescription": "广播服务管理器 - 全功能桌面管理应用，内嵌广播服务",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "wix": {
+        "language": "zh-CN"
+      },
+      "nsis": {
+        "displayLanguageSelector": false
+      }
+    }
   }
 }

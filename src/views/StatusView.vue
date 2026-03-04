@@ -4,7 +4,6 @@
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
-          <el-icon><MusicNote /></el-icon>
           <span>音频状态</span>
         </div>
       </template>
@@ -42,7 +41,6 @@
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
-          <el-icon><InfoFilled /></el-icon>
           <span>服务信息</span>
         </div>
       </template>
@@ -68,7 +66,6 @@
     <el-card class="settings-card">
       <template #header>
         <div class="card-header">
-          <el-icon><Document /></el-icon>
           <span>关于</span>
         </div>
       </template>
@@ -86,10 +83,6 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useServiceStore } from '../stores'
 import { tauriClient } from '../composables'
-import {
-  InfoFilled,
-  Document,
-} from '@element-plus/icons-vue'
 
 // Store
 const serviceStore = useServiceStore()
@@ -109,8 +102,7 @@ const currentTrack = computed(() => {
 })
 
 // 服务器配置
-const wsPort = ref(8080)
-const httpPort = ref(8081)
+const port = ref(8081)
 const bindAddress = ref('0.0.0.0')
 
 // 判断是否为环回地址
@@ -140,13 +132,13 @@ const formatUrlAddress = (addr: string): string => {
 // WebSocket 地址
 const wsAddress = computed(() => {
   const addr = formatUrlAddress(bindAddress.value)
-  return `ws://${addr}:${wsPort.value}/ws`
+  return `ws://${addr}:${port.value}/ws`
 })
 
 // HTTP API 地址
 const httpAddress = computed(() => {
   const addr = formatUrlAddress(bindAddress.value)
-  return `http://${addr}:${httpPort.value}/api`
+  return `http://${addr}:${port.value}/api`
 })
 
 // 播放模式标签
@@ -171,8 +163,7 @@ async function refreshState() {
   try {
     const config = await tauriClient.getServerConfig()
     bindAddress.value = config.bind_address
-    wsPort.value = config.ws_port
-    httpPort.value = config.http_port
+    port.value = config.port
   } catch (e) {
     console.error('获取服务器配置失败:', e)
   }

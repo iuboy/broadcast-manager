@@ -218,6 +218,7 @@ struct MusicEngineInner {
     /// 音量
     volume: f32,
     /// 当前曲目索引
+    #[allow(dead_code)]
     current_index: usize,
     /// 音频闪避器
     ducker: crate::audio::mixer::AudioDucker,
@@ -238,6 +239,7 @@ pub struct MusicEngine {
     /// 内部状态（线程安全）
     inner: Mutex<MusicEngineInner>,
     /// 音乐目录（用于扫描）
+    #[allow(dead_code)]
     music_dir: RwLock<PathBuf>,
     /// 当前曲目 ID（用于状态查询）
     current_track_id: RwLock<Option<String>>,
@@ -249,11 +251,13 @@ pub struct MusicEngine {
 
 impl MusicEngine {
     /// 创建新的音乐引擎
+    #[allow(dead_code)]
     pub fn new(music_dir: PathBuf, volume: f32) -> Self {
         Self::with_ducking_and_playlist(music_dir, volume, DuckingConfig::default(), None)
     }
 
     /// 创建带有闪避配置的音乐引擎
+    #[allow(dead_code)]
     pub fn with_ducking(music_dir: PathBuf, volume: f32, ducking_config: DuckingConfig) -> Self {
         Self::with_ducking_and_playlist(music_dir, volume, ducking_config, None)
     }
@@ -646,26 +650,31 @@ impl MusicEngine {
     }
 
     /// 获取音量
+    #[allow(dead_code)]
     pub fn volume(&self) -> f32 {
         self.inner.lock().volume
     }
 
     /// 获取播放状态
+    #[allow(dead_code)]
     pub fn state(&self) -> MusicState {
         self.inner.lock().state
     }
 
     /// 是否正在播放
+    #[allow(dead_code)]
     pub fn is_playing(&self) -> bool {
         self.inner.lock().state == MusicState::Playing
     }
 
     /// 获取播放列表
+    #[allow(dead_code)]
     pub fn playlist(&self) -> Arc<Playlist> {
         self.playlist.clone()
     }
 
     /// 添加音乐文件
+    #[allow(dead_code)]
     pub fn add_file(&self, path: PathBuf) -> String {
         let item = PlaylistItem::from_path(path);
         let id = item.id.clone();
@@ -675,6 +684,7 @@ impl MusicEngine {
     }
 
     /// 从目录扫描音乐文件
+    #[allow(dead_code)]
     pub fn scan_directory(&self, dir: &PathBuf) -> AudioResult<usize> {
         use walkdir::WalkDir;
 
@@ -701,6 +711,7 @@ impl MusicEngine {
     }
 
     /// 设置播放模式
+    #[allow(dead_code)]
     pub fn set_play_mode(&self, mode: PlayMode) {
         self.playlist.set_play_mode(mode);
     }
@@ -720,6 +731,7 @@ impl MusicEngine {
     }
 
     /// 获取当前闪避状态
+    #[allow(dead_code)]
     pub fn duck_state(&self) -> DuckState {
         *self.duck_state.read()
     }
@@ -800,6 +812,7 @@ impl MusicEngine {
     }
 
     /// 获取播放进度百分比 (0.0 - 1.0)
+    #[allow(dead_code)]
     pub fn progress(&self) -> Option<f64> {
         let duration = self.duration()?;
         let position = self.position();

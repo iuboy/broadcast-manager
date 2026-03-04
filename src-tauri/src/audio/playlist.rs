@@ -216,6 +216,7 @@ impl Playlist {
     }
 
     /// 获取播放模式
+    #[allow(dead_code)]
     pub fn play_mode(&self) -> PlayMode {
         *self.play_mode.read()
     }
@@ -263,6 +264,7 @@ impl Playlist {
     }
 
     /// 重排序
+    #[allow(dead_code)]
     pub fn reorder(&self, from_index: usize, to_index: usize) -> bool {
         let mut items = self.items.write();
         if from_index >= items.len() || to_index >= items.len() {

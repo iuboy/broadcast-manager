@@ -1,4 +1,4 @@
-use config::{Config as ConfigRs, ConfigError, File, FileFormat};
+use config::{Config as ConfigRs, ConfigError, File};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
@@ -40,13 +40,18 @@ pub struct ServerConfig {
     /// 监听地址 (例如: 0.0.0.0, 127.0.0.1, localhost)
     #[serde(default = "default_bind_address")]
     pub bind_address: String,
-    pub ws_port: u16,
-    pub http_port: u16,
+    /// 服务端口 (WebSocket 和 HTTP API 共用)
+    #[serde(default = "default_port")]
+    pub port: u16,
     pub max_connections: usize,
     #[serde(default)]
     pub cors: CorsConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+}
+
+fn default_port() -> u16 {
+    8081
 }
 
 fn default_bind_address() -> String {
@@ -104,7 +109,7 @@ pub struct BroadcastConfig {
 impl Default for BroadcastConfig {
     fn default() -> Self {
         Self {
-            sample_rate: 48000,
+            sample_rate: 44100,  // 改为 44100Hz 以兼容大多数设备
             channels: 1,
             codec: "pcm".to_string(),
         }
@@ -216,8 +221,7 @@ impl Default for Config {
         Self {
             server: ServerConfig {
                 bind_address: "0.0.0.0".to_string(),
-                ws_port: 8080,
-                http_port: 8081,
+                port: 8081,
                 max_connections: 10,
                 cors: CorsConfig::default(),
                 auth: AuthConfig::default(),

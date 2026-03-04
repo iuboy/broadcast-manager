@@ -29,7 +29,7 @@ pub struct WsParams {
     /// 编解码格式（pcm/opus），默认 pcm
     #[serde(default = "default_codec")]
     pub codec: String,
-    /// 采样率（8000-48000），默认 48000
+    /// 采样率（8000-48000），默认 44100
     #[serde(default = "default_sample_rate")]
     pub sample_rate: u32,
     /// 声道数（1=单声道，2=立体声），默认 1
@@ -42,7 +42,7 @@ fn default_codec() -> String {
 }
 
 fn default_sample_rate() -> u32 {
-    48000
+    44100  // 改为 44100Hz 以兼容大多数设备
 }
 
 fn default_channels() -> u16 {
@@ -68,9 +68,9 @@ impl WsParams {
         }
 
         // 验证采样率
-        if ![8000, 16000, 24000, 48000].contains(&self.sample_rate) {
+        if ![8000, 16000, 24000, 44100, 48000].contains(&self.sample_rate) {
             return Err(format!(
-                "不支持的采样率: {}，支持: 8000, 16000, 24000, 48000",
+                "不支持的采样率: {}，支持: 8000, 16000, 24000, 44100, 48000",
                 self.sample_rate
             ));
         }
@@ -89,11 +89,6 @@ impl WsParams {
 /// 发送就绪消息
 fn send_ready() -> Message {
     Message::Text("ready".to_string())
-}
-
-/// 发送忙碌消息（广播被占用）
-fn send_busy(duration_secs: f64) -> Message {
-    Message::Text(format!("busy|{:.1}", duration_secs))
 }
 
 /// 发送错误消息
@@ -150,10 +145,14 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams) {
     let (mut sender, mut receiver) = socket.split();
 
     // 发送就绪消息
-    if sender.send(send_ready()).await.is_err() {
-        tracing::warn!("无法发送就绪消息");
-        state.broadcast_manager.remove_client(&client_id);
-        return;
+    tracing::info!("正在发送就绪消息到客户端 {}", client_id);
+    match sender.send(send_ready()).await {
+        Ok(()) => tracing::info!("就绪消息发送成功"),
+        Err(e) => {
+            tracing::warn!("无法发送就绪消息: {}", e);
+            state.broadcast_manager.remove_client(&client_id);
+            return;
+        }
     }
 
     // 心跳状态
@@ -161,92 +160,148 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams) {
     let mut is_broadcasting = false;
 
     // 消息处理循环
-    loop {
-        tokio::select! {
-            // 接收消息
-            msg = receiver.next() => {
-                match msg {
-                    Some(Ok(msg)) => {
-                        last_heartbeat = Instant::now();
+    tracing::info!("客户端 {} 进入消息循环，将在 {} 秒后检查超时", client_id, HEARTBEAT_INTERVAL_SECS);
 
-                        match msg {
-                            // 文本消息（控制命令）
-                            Message::Text(text) => {
-                                match text.as_str() {
-                                    "start_broadcast" => {
-                                        // 请求开始广播
-                                        match state.broadcast_manager.request_broadcast(&client_id) {
-                                            Ok(()) => {
-                                                is_broadcasting = true;
-                                                // 通知 Audio Actor 开始闪避
-                                                crate::audio().start_ducking();
-                                                tracing::info!("客户端 {} 开始广播", client_id);
-                                                let _ = sender.send(Message::Text("broadcasting".to_string())).await;
-                                            }
-                                            Err(e) => {
-                                                let _ = sender.send(send_error(&e)).await;
-                                            }
+    // 添加调试：检查 receiver 是否正常工作
+    tracing::info!("客户端 {} receiver 准备就绪", client_id);
+
+    loop {
+        // 使用 timeout 确保超时检查能够执行
+        tracing::debug!("客户端 {} 等待下一条消息...", client_id);
+        let msg = tokio::time::timeout(
+            Duration::from_secs(HEARTBEAT_INTERVAL_SECS),
+            receiver.next()
+        ).await;
+
+        tracing::debug!("客户端 {} 收到事件: {:?}", client_id, msg);
+
+        match msg {
+            Ok(Some(Ok(msg))) => {
+                last_heartbeat = Instant::now();
+
+                match msg {
+                    // 文本消息（控制命令）
+                    Message::Text(text) => {
+                        tracing::info!("客户端 {} 收到文本消息: '{}'", client_id, text);
+                        match text.as_str() {
+                            "start_broadcast" => {
+                                // 请求开始广播
+                                tracing::info!("客户端 {} 请求开始广播", client_id);
+
+                                // 注意：当前客户端只发送 PCM 数据，无论 codec 参数是什么
+                                // 为了确保兼容性，我们强制使用 PCM 解码
+                                let actual_codec = if params.codec.to_lowercase() == "opus" {
+                                    tracing::warn!("客户端请求 Opus 编解码，但当前实现只支持 PCM。将使用 PCM 模式。");
+                                    "pcm".to_string()
+                                } else {
+                                    params.codec.clone()
+                                };
+
+                                // 使用客户端请求的采样率（这样服务端和客户端完全匹配）
+                                tracing::info!(
+                                    "使用客户端采样率: {}Hz",
+                                    params.sample_rate
+                                );
+
+                                // 根据客户端采样率重新配置广播引擎
+                                crate::audio().reconfigure_broadcast(
+                                    actual_codec,
+                                    params.sample_rate,  // 使用客户端请求的采样率
+                                    params.channels
+                                );
+
+                                match state.broadcast_manager.request_broadcast(&client_id) {
+                                    Ok(()) => {
+                                        is_broadcasting = true;
+                                        // 通知 Audio Actor 开始闪避
+                                        crate::audio().start_ducking();
+                                        tracing::info!("客户端 {} 开始广播，发送 broadcasting 响应", client_id);
+                                        match sender.send(Message::Text("broadcasting".to_string())).await {
+                                            Ok(()) => tracing::info!("broadcasting 响应发送成功"),
+                                            Err(e) => tracing::error!("broadcasting 响应发送失败: {}", e),
                                         }
                                     }
-                                    "stop_broadcast" => {
-                                        // 结束广播
-                                        state.broadcast_manager.end_broadcast(&client_id);
-                                        is_broadcasting = false;
-                                        // 通知 Audio Actor 停止闪避
-                                        crate::audio().stop_ducking();
-                                        tracing::info!("客户端 {} 结束广播", client_id);
-                                        let _ = sender.send(Message::Text("idle".to_string())).await;
-                                    }
-                                    "heartbeat" => {
-                                        // 心跳响应
-                                        state.broadcast_manager.update_activity(&client_id);
-                                        let _ = sender.send(Message::Text("pong".to_string())).await;
-                                    }
-                                    _ => {
-                                        tracing::debug!("收到未知文本消息: {}", text);
+                                    Err(e) => {
+                                        tracing::error!("客户端 {} 请求广播失败: {}", client_id, e);
+                                        let _ = sender.send(send_error(&e)).await;
                                     }
                                 }
                             }
-                            // 二进制消息（音频数据）
-                            Message::Binary(data) => {
-                                if is_broadcasting {
-                                    // 通过 Audio Actor 推送音频数据
-                                    crate::audio().push_broadcast_bytes(data);
-                                }
+                            "stop_broadcast" => {
+                                tracing::warn!("==================== STOP_BROADCAST 开始 ====================");
+                                // 结束广播
+                                state.broadcast_manager.end_broadcast(&client_id);
+                                is_broadcasting = false;
+                                // 通知 Audio Actor 停止闪避
+                                tracing::warn!("客户端 {} 请求停止闪避", client_id);
+                                crate::audio().stop_ducking();
+                                tracing::warn!("客户端 {} 已发送停止闪避请求", client_id);
+                                let _ = sender.send(Message::Text("idle".to_string())).await;
+                                tracing::warn!("==================== STOP_BROADCAST 结束 ====================");
                             }
-                            Message::Ping(data) => {
-                                let _ = sender.send(Message::Pong(data)).await;
+                            "heartbeat" => {
+                                // 心跳响应
+                                state.broadcast_manager.update_activity(&client_id);
+                                let _ = sender.send(Message::Text("pong".to_string())).await;
                             }
-                            Message::Pong(_) => {}
-                            Message::Close(_) => {
-                                tracing::info!("客户端 {} 关闭连接", client_id);
-                                break;
+                            _ => {
+                                tracing::debug!("收到未知文本消息: {}", text);
                             }
                         }
                     }
-                    Some(Err(e)) => {
-                        tracing::warn!("WebSocket 错误: {}", e);
+                    // 二进制消息（音频数据）
+                    Message::Binary(data) => {
+                        tracing::debug!("客户端 {} 收到二进制数据: {} 字节, is_broadcasting={}",
+                            client_id, data.len(), is_broadcasting);
+                        if is_broadcasting {
+                            // 通过 Audio Actor 推送音频数据
+                            crate::audio().push_broadcast_bytes(data);
+                        } else {
+                            tracing::warn!("客户端 {} 发送音频数据但未在广播状态，丢弃 {} 字节",
+                                client_id, data.len());
+                        }
+                    }
+                    Message::Ping(data) => {
+                        let _ = sender.send(Message::Pong(data)).await;
+                    }
+                    Message::Pong(_) => {}
+                    Message::Close(_) => {
+                        tracing::info!("客户端 {} 关闭连接", client_id);
                         break;
                     }
-                    None => break,
                 }
             }
-
-            // 心跳超时检查
-            _ = tokio::time::sleep(Duration::from_secs(HEARTBEAT_INTERVAL_SECS)) => {
-                if last_heartbeat.elapsed() > Duration::from_secs(HEARTBEAT_TIMEOUT_SECS) {
-                    tracing::warn!("客户端 {} 心跳超时", client_id);
+            Ok(Some(Err(e))) => {
+                tracing::warn!("客户端 {} WebSocket 错误: {}", client_id, e);
+                break;
+            }
+            Ok(None) => {
+                tracing::info!("客户端 {} 连接已关闭（None）", client_id);
+                break;
+            }
+            Err(_) => {
+                // 超时 - 检查心跳超时
+                let elapsed = last_heartbeat.elapsed().as_secs();
+                tracing::debug!("客户端 {} 心跳检查: 上次活动 {} 秒前", client_id, elapsed);
+                if elapsed > HEARTBEAT_TIMEOUT_SECS as u64 {
+                    tracing::warn!("客户端 {} 心跳超时 ({} 秒无活动)", client_id, elapsed);
                     break;
                 }
+                // 如果还没超时，继续循环
             }
         }
     }
 
-    // 清理
-    if is_broadcasting {
+    // 清理 - 总是尝试停止闪避，确保状态一致
+    let was_broadcasting = state.broadcast_manager.is_broadcasting() &&
+                          state.broadcast_manager.current_broadcaster().as_deref() == Some(&client_id);
+
+    if was_broadcasting {
+        tracing::info!("客户端 {} 断开，停止广播和闪避", client_id);
         state.broadcast_manager.end_broadcast(&client_id);
         crate::audio().stop_ducking();
     }
+
     state.broadcast_manager.remove_client(&client_id);
     tracing::info!("客户端 {} 断开连接", client_id);
 }

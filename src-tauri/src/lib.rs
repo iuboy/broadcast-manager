@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use audio::{AudioActor, AudioMessage, AudioState, PlaybackProgress, PlaylistItemDto};
 use config::Config;
 use server::broadcast::BroadcastManager;
+use tracing_subscriber::prelude::*;
 
 /// 全局音频 Actor 实例
 static AUDIO_ACTOR: OnceLock<AudioActor> = OnceLock::new();
@@ -235,8 +236,7 @@ fn get_service_status() -> serde_json::Value {
     serde_json::json!({
         "status": "running",
         "state": "running",
-        "ws_port": config.server.ws_port,
-        "http_port": config.server.http_port,
+        "port": config.server.port,
         "error": serde_json::Value::Null
     })
 }
@@ -247,8 +247,7 @@ fn get_server_config() -> ServerConfigDto {
     let config = get_config().lock().unwrap();
     ServerConfigDto {
         bind_address: config.server.bind_address.clone(),
-        ws_port: config.server.ws_port,
-        http_port: config.server.http_port,
+        port: config.server.port,
         max_connections: config.server.max_connections,
     }
 }
@@ -258,8 +257,7 @@ fn get_server_config() -> ServerConfigDto {
 fn update_server_config(config_dto: ServerConfigDto) -> Result<(), String> {
     update_config(|c| {
         c.server.bind_address = config_dto.bind_address;
-        c.server.ws_port = config_dto.ws_port;
-        c.server.http_port = config_dto.http_port;
+        c.server.port = config_dto.port;
         c.server.max_connections = config_dto.max_connections;
     }).map_err(|e| e.to_string())
 }
@@ -317,22 +315,61 @@ async fn is_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ServerConfigDto {
     bind_address: String,
-    ws_port: u16,
-    http_port: u16,
+    port: u16,
     max_connections: usize,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // 初始化日志
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into()),
-        )
+    // 获取日志目录
+    let log_dir = dirs::home_dir()
+        .map(|home| home.join(".broadcast-manager").join("logs"))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    // 确保日志目录存在
+    std::fs::create_dir_all(&log_dir).unwrap_or_else(|e| {
+        eprintln!("无法创建日志目录 {:?}: {}", log_dir, e);
+    });
+
+    let log_path = log_dir.join("broadcast-manager.log");
+    tracing::info!("日志目录: {:?}", log_dir);
+
+    // 配置文件日志记录器（按天轮转）
+    let file_appender = tracing_appender::rolling::daily(log_dir.clone(), "broadcast-manager");
+
+    // 创建非阻塞写入器
+    let (non_blocking_appender, _guard) = tracing_appender::non_blocking(file_appender);
+
+    // 配置日志订阅器 - 同时输出到控制台和文件
+    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive(tracing::Level::INFO.into());
+
+    // 控制台层
+    let console_layer = tracing_subscriber::fmt::layer()
+        .with_writer(std::io::stdout)
+        .with_thread_ids(false)
+        .with_file(true)
+        .with_line_number(true);
+
+    // 文件层
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking_appender)
+        .with_ansi(false)
+        .with_thread_ids(false)
+        .with_file(true)
+        .with_line_number(true);
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(console_layer)
+        .with(file_layer)
         .init();
 
     tracing::info!("广播服务管理器启动中...");
+    tracing::info!("日志文件: {:?}", log_path);
+
+    // 保留 _guard 以防止文件日志过早关闭
+    std::mem::forget(_guard);
 
     // 加载配置
     let config = Arc::new(Mutex::new(Config::load().unwrap_or_else(|e| {
@@ -450,7 +487,7 @@ async fn start_embedded_server(
         .with_state(state);
 
     // 绑定地址
-    let addr: SocketAddr = format!("{}:{}", config.server.bind_address, config.server.http_port).parse()?;
+    let addr: SocketAddr = format!("{}:{}", config.server.bind_address, config.server.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!("服务器启动在 http://{} (WebSocket: ws://{}/ws)", addr, addr);

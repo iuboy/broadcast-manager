@@ -4,7 +4,6 @@
 //! 所有音频操作已迁移到 Tauri 命令
 
 use axum::{
-    extract::State,
     routing::get,
     Json, Router,
 };
@@ -13,7 +12,7 @@ use std::sync::Arc;
 
 use crate::server::BroadcastManager;
 
-/// 统一应用状态（简化版）
+/// 统一应用状态
 #[derive(Clone)]
 pub struct AppState {
     pub broadcast_manager: Arc<BroadcastManager>,

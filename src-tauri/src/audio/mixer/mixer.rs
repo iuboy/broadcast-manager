@@ -5,19 +5,58 @@
 //! - 多音源混音（广播 + 背景音乐）
 //! - 音频闪避（广播时自动降低背景音乐音量）
 //! - 独立音量控制
+//! - 无锁环形缓冲区读取广播音频
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{SampleFormat, Stream, StreamConfig};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::ducker::AudioDucker;
-use crate::audio::{BroadcastEngine, MusicEngine, MixerControl};
+use crate::audio::{MixerControl, broadcast_consumer};
+use crate::audio::engine::{MusicEngine, read_from_ringbuf, BroadcastConsumer};
 use crate::error::{AudioError, AudioResult};
+
+/// 线性插值重采样器
+///
+/// 将音频从输入采样率转换到输出采样率。
+/// 使用线性插值算法，简单快速，适合实时音频处理。
+fn resample_linear(input: &[f32], input_rate: u32, output_rate: u32, output: &mut [f32]) {
+    if input_rate == output_rate {
+        // 采样率相同，直接复制
+        let len = input.len().min(output.len());
+        output[..len].copy_from_slice(&input[..len]);
+        // 填充剩余部分为静音
+        for i in len..output.len() {
+            output[i] = 0.0;
+        }
+        return;
+    }
+
+    let ratio = input_rate as f64 / output_rate as f64;
+
+    for i in 0..output.len() {
+        let pos = i as f64 * ratio;
+        let index = pos as usize;
+        let frac = pos - index as f64;
+
+        if index + 1 < input.len() {
+            // 线性插值
+            output[i] = input[index] * (1.0 - frac) as f32 + input[index + 1] * frac as f32;
+        } else if index < input.len() {
+            // 超出范围，使用最后一个样本
+            output[i] = input[index];
+        } else {
+            // 完全超出范围，填充静音
+            output[i] = 0.0;
+        }
+    }
+}
 
 /// 共享混音状态（用于监控）
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct MixerState {
     /// 主音量
     pub master_volume: f32,
@@ -34,26 +73,34 @@ pub struct MixerState {
 /// 音频混合器
 ///
 /// 负责将广播音频和背景音乐混合后输出到扬声器。
-/// 使用 MusicEngine 的 read_samples 接口读取背景音乐样本。
+/// 使用全局无锁环形缓冲区消费者读取广播音频。
 pub struct AudioMixer {
     /// 音频输出流
+    #[allow(dead_code)]
     stream: Option<Stream>,
     /// 音频输出流配置
+    #[allow(dead_code)]
     config: StreamConfig,
     /// 混音器控制状态（与 HTTP API 共享）
+    #[allow(dead_code)]
     mixer_control: Arc<Mutex<MixerControl>>,
     /// 音频闪避器
+    #[allow(dead_code)]
     ducker: Arc<Mutex<AudioDucker>>,
-    /// 广播引擎引用（使用 RwLock 支持动态重配置）
-    broadcast_engine: Arc<RwLock<BroadcastEngine>>,
     /// 音乐引擎引用
+    #[allow(dead_code)]
     music_engine: Arc<MusicEngine>,
+    /// 广播音频消费者（从全局静态获取）
+    #[allow(dead_code)]
+    broadcast_consumer: Arc<BroadcastConsumer>,
+    /// 输出采样率（用于重采样）
+    #[allow(dead_code)]
+    output_sample_rate: u32,
 }
 
 impl AudioMixer {
     /// 创建新的音频混合器
     pub fn new(
-        broadcast_engine: Arc<RwLock<BroadcastEngine>>,
         music_engine: Arc<MusicEngine>,
         mixer_control: Arc<Mutex<MixerControl>>,
         duck_volume: f32,
@@ -72,11 +119,12 @@ impl AudioMixer {
 
         let sample_format = supported_config.sample_format();
         let config: StreamConfig = supported_config.into();
+        let output_sample_rate = config.sample_rate.0;  // 使用系统默认采样率
 
         tracing::info!(
-            "音频输出设备: {}, 采样率: {}, 声道: {}",
+            "音频输出设备: {}, 采样率: {} (系统默认), 声道: {}",
             device.name().unwrap_or_default(),
-            config.sample_rate.0,
+            output_sample_rate,
             config.channels
         );
 
@@ -86,19 +134,23 @@ impl AudioMixer {
             fade_out_ms,
         )));
 
+        // 获取全局广播音频消费者
+        let broadcast_consumer = broadcast_consumer().clone();
+
         let err_fn = |err| tracing::error!("音频流错误: {}", err);
 
         // 根据采样格式创建流
+        let output_channels = config.channels;
         let stream = match sample_format {
             SampleFormat::F32 => {
                 let mixer_control_clone = mixer_control.clone();
-                let broadcast_clone = broadcast_engine.clone();
                 let music_clone = music_engine.clone();
                 let ducker_clone = ducker.clone();
+                let consumer_clone = broadcast_consumer.clone();
                 device.build_output_stream::<f32, _, _>(
                     &config,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                        Self::mix_audio_f32(data, &mixer_control_clone, &broadcast_clone, &music_clone, &ducker_clone);
+                        Self::mix_audio_f32(data, &mixer_control_clone, &consumer_clone, &music_clone, &ducker_clone, output_sample_rate, output_channels);
                     },
                     err_fn,
                     None,
@@ -106,13 +158,13 @@ impl AudioMixer {
             }
             SampleFormat::I16 => {
                 let mixer_control_clone = mixer_control.clone();
-                let broadcast_clone = broadcast_engine.clone();
                 let music_clone = music_engine.clone();
                 let ducker_clone = ducker.clone();
+                let consumer_clone = broadcast_consumer.clone();
                 device.build_output_stream::<i16, _, _>(
                     &config,
                     move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                        Self::mix_audio_i16(data, &mixer_control_clone, &broadcast_clone, &music_clone, &ducker_clone);
+                        Self::mix_audio_i16(data, &mixer_control_clone, &consumer_clone, &music_clone, &ducker_clone, output_sample_rate, output_channels);
                     },
                     err_fn,
                     None,
@@ -120,13 +172,13 @@ impl AudioMixer {
             }
             SampleFormat::U16 => {
                 let mixer_control_clone = mixer_control.clone();
-                let broadcast_clone = broadcast_engine.clone();
                 let music_clone = music_engine.clone();
                 let ducker_clone = ducker.clone();
+                let consumer_clone = broadcast_consumer.clone();
                 device.build_output_stream::<u16, _, _>(
                     &config,
                     move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                        Self::mix_audio_u16(data, &mixer_control_clone, &broadcast_clone, &music_clone, &ducker_clone);
+                        Self::mix_audio_u16(data, &mixer_control_clone, &consumer_clone, &music_clone, &ducker_clone, output_sample_rate, output_channels);
                     },
                     err_fn,
                     None,
@@ -147,8 +199,9 @@ impl AudioMixer {
             config,
             mixer_control,
             ducker,
-            broadcast_engine,
             music_engine,
+            broadcast_consumer,
+            output_sample_rate,
         })
     }
 
@@ -156,9 +209,11 @@ impl AudioMixer {
     fn mix_audio_f32(
         data: &mut [f32],
         mixer_control: &Arc<Mutex<MixerControl>>,
-        broadcast_engine: &Arc<RwLock<BroadcastEngine>>,
+        _broadcast_consumer: &Arc<BroadcastConsumer>,
         music_engine: &Arc<MusicEngine>,
         ducker: &Arc<Mutex<AudioDucker>>,
+        output_sample_rate: u32,
+        output_channels: u16,
     ) {
         // 每帧更新闪避器状态
         let mut d = ducker.lock();
@@ -168,9 +223,44 @@ impl AudioMixer {
         // 从共享控制状态获取主音量
         let master_vol = mixer_control.lock().master_volume;
 
-        // 从广播引擎读取样本（已应用引擎音量）
+        // 从全局静态获取最新的消费者（而不是使用参数传入的旧消费者）
+        let current_consumer = crate::audio::broadcast_consumer();
+
+        // 动态获取当前广播采样率
+        let broadcast_sample_rate = crate::audio::broadcast_sample_rate();
+
+        // 计算输出声道数和帧数
+        let output_channels = output_channels as usize;
+        let output_frames = data.len() / output_channels;
+
+        // 广播数据是单声道，需要读取的样本数
+        let broadcast_frames_needed = if broadcast_sample_rate == output_sample_rate {
+            output_frames
+        } else {
+            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64)).ceil() as usize + 100
+        };
+
+        // 从无锁环形缓冲区读取广播音频（单声道）
+        let mut raw_broadcast_buffer = vec![0.0f32; broadcast_frames_needed];
+        let actually_read = read_from_ringbuf(&current_consumer, &mut raw_broadcast_buffer);
+
+        // 重采样到目标采样率（仍然是单声道）
+        let mut broadcast_mono = vec![0.0f32; output_frames];
+        if broadcast_sample_rate != output_sample_rate {
+            resample_linear(&raw_broadcast_buffer, broadcast_sample_rate, output_sample_rate, &mut broadcast_mono);
+        } else {
+            let copy_len = actually_read.min(output_frames);
+            broadcast_mono[..copy_len].copy_from_slice(&raw_broadcast_buffer[..copy_len]);
+        }
+
+        // 将单声道广播数据转换为输出声道数（单声道 -> 立体声）
         let mut broadcast_buffer = vec![0.0f32; data.len()];
-        broadcast_engine.read().read_samples(&mut broadcast_buffer);
+        for frame in 0..output_frames {
+            let mono_sample = broadcast_mono[frame];
+            for ch in 0..output_channels {
+                broadcast_buffer[frame * output_channels + ch] = mono_sample;
+            }
+        }
 
         // 从音乐引擎读取样本（已应用引擎音量和闪避）
         let mut music_buffer = vec![0.0f32; data.len()];
@@ -191,9 +281,11 @@ impl AudioMixer {
     fn mix_audio_i16(
         data: &mut [i16],
         mixer_control: &Arc<Mutex<MixerControl>>,
-        broadcast_engine: &Arc<RwLock<BroadcastEngine>>,
+        _broadcast_consumer: &Arc<BroadcastConsumer>,
         music_engine: &Arc<MusicEngine>,
         ducker: &Arc<Mutex<AudioDucker>>,
+        output_sample_rate: u32,
+        output_channels: u16,
     ) {
         // 每帧更新闪避器状态
         let mut d = ducker.lock();
@@ -203,9 +295,43 @@ impl AudioMixer {
         // 从共享控制状态获取主音量
         let master_vol = mixer_control.lock().master_volume;
 
-        // 从广播引擎读取样本（已应用引擎音量）
+        // 从全局静态获取最新的消费者
+        let current_consumer = crate::audio::broadcast_consumer();
+
+        // 动态获取当前广播采样率
+        let broadcast_sample_rate = crate::audio::broadcast_sample_rate();
+
+        // 计算输出声道数和帧数
+        let output_channels = output_channels as usize;
+        let output_frames = data.len() / output_channels;
+
+        // 广播数据是单声道，需要读取的样本数（基于帧数）
+        let broadcast_frames_needed = if broadcast_sample_rate == output_sample_rate {
+            output_frames
+        } else {
+            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64)).ceil() as usize + 100
+        };
+
+        // 从无锁环形缓冲区读取广播音频（单声道）
+        let mut raw_broadcast_buffer = vec![0.0f32; broadcast_frames_needed];
+        let actually_read = read_from_ringbuf(&current_consumer, &mut raw_broadcast_buffer);
+
+        // 重采样到目标采样率（仍然是单声道）
+        let mut broadcast_mono = vec![0.0f32; output_frames];
+        if broadcast_sample_rate != output_sample_rate {
+            resample_linear(&raw_broadcast_buffer, broadcast_sample_rate, output_sample_rate, &mut broadcast_mono);
+        } else {
+            broadcast_mono[..actually_read.min(output_frames)].copy_from_slice(&raw_broadcast_buffer[..actually_read.min(output_frames)]);
+        }
+
+        // 将单声道广播数据转换为输出声道数
         let mut broadcast_buffer = vec![0.0f32; data.len()];
-        broadcast_engine.read().read_samples(&mut broadcast_buffer);
+        for frame in 0..output_frames {
+            let mono_sample = broadcast_mono[frame];
+            for ch in 0..output_channels {
+                broadcast_buffer[frame * output_channels + ch] = mono_sample;
+            }
+        }
 
         // 从音乐引擎读取样本（已应用引擎音量和闪避）
         let mut music_buffer = vec![0.0f32; data.len()];
@@ -225,9 +351,11 @@ impl AudioMixer {
     fn mix_audio_u16(
         data: &mut [u16],
         mixer_control: &Arc<Mutex<MixerControl>>,
-        broadcast_engine: &Arc<RwLock<BroadcastEngine>>,
+        _broadcast_consumer: &Arc<BroadcastConsumer>,
         music_engine: &Arc<MusicEngine>,
         ducker: &Arc<Mutex<AudioDucker>>,
+        output_sample_rate: u32,
+        output_channels: u16,
     ) {
         // 每帧更新闪避器状态
         let mut d = ducker.lock();
@@ -237,9 +365,43 @@ impl AudioMixer {
         // 从共享控制状态获取主音量
         let master_vol = mixer_control.lock().master_volume;
 
-        // 从广播引擎读取样本（已应用引擎音量）
+        // 从全局静态获取最新的消费者
+        let current_consumer = crate::audio::broadcast_consumer();
+
+        // 动态获取当前广播采样率
+        let broadcast_sample_rate = crate::audio::broadcast_sample_rate();
+
+        // 计算输出声道数和帧数
+        let output_channels = output_channels as usize;
+        let output_frames = data.len() / output_channels;
+
+        // 广播数据是单声道，需要读取的样本数（基于帧数）
+        let broadcast_frames_needed = if broadcast_sample_rate == output_sample_rate {
+            output_frames
+        } else {
+            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64)).ceil() as usize + 100
+        };
+
+        // 从无锁环形缓冲区读取广播音频（单声道）
+        let mut raw_broadcast_buffer = vec![0.0f32; broadcast_frames_needed];
+        let actually_read = read_from_ringbuf(&current_consumer, &mut raw_broadcast_buffer);
+
+        // 重采样到目标采样率（仍然是单声道）
+        let mut broadcast_mono = vec![0.0f32; output_frames];
+        if broadcast_sample_rate != output_sample_rate {
+            resample_linear(&raw_broadcast_buffer, broadcast_sample_rate, output_sample_rate, &mut broadcast_mono);
+        } else {
+            broadcast_mono[..actually_read.min(output_frames)].copy_from_slice(&raw_broadcast_buffer[..actually_read.min(output_frames)]);
+        }
+
+        // 将单声道广播数据转换为输出声道数
         let mut broadcast_buffer = vec![0.0f32; data.len()];
-        broadcast_engine.read().read_samples(&mut broadcast_buffer);
+        for frame in 0..output_frames {
+            let mono_sample = broadcast_mono[frame];
+            for ch in 0..output_channels {
+                broadcast_buffer[frame * output_channels + ch] = mono_sample;
+            }
+        }
 
         // 从音乐引擎读取样本（已应用引擎音量和闪避）
         let mut music_buffer = vec![0.0f32; data.len()];
@@ -257,17 +419,20 @@ impl AudioMixer {
     }
 
     /// 获取流配置
+    #[allow(dead_code)]
     pub fn stream_config(&self) -> &StreamConfig {
         &self.config
     }
 
-    /// 获取广播引擎引用
-    pub fn broadcast_engine(&self) -> &Arc<RwLock<BroadcastEngine>> {
-        &self.broadcast_engine
-    }
-
     /// 获取音乐引擎引用
+    #[allow(dead_code)]
     pub fn music_engine(&self) -> &Arc<MusicEngine> {
         &self.music_engine
+    }
+
+    /// 获取环形缓冲区可用样本数
+    #[allow(dead_code)]
+    pub fn broadcast_available_samples(&self) -> usize {
+        crate::audio::engine::BroadcastConsumer::available_samples_arc(&self.broadcast_consumer)
     }
 }

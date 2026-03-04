@@ -27,6 +27,7 @@ mod opus_impl {
     use opus::{Channels, Decoder};
 
     /// Opus 解码器（真实实现）
+    #[derive(Debug)]
     pub struct OpusDecoderEngine {
         decoder: Decoder,
     }
@@ -126,6 +127,7 @@ pub use opus_impl::OpusDecoderEngine;
 pub use opus_stub::OpusDecoderEngine;
 
 /// 检查 Opus 支持是否在运行时可用
+#[allow(dead_code)]
 pub fn is_opus_available() -> bool {
     cfg!(feature = "opus")
 }

@@ -11,10 +11,51 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use super::engine::{BroadcastEngine, DuckingConfig, MusicEngine};
+use super::engine::{BroadcastEngineLockFree, BroadcastConsumer, DuckingConfig, MusicEngine};
 use super::mixer::AudioMixer;
 use super::playlist::{Playlist, PlaylistItem};
 use crate::config::Config;
+use ringbuf::traits::Split;
+
+/// 全局广播音频缓冲区消费者（音频回调线程使用）
+/// 使用 RwLock 实现安全的线程间共享
+static BROADCAST_CONSUMER: parking_lot::RwLock<Option<Arc<BroadcastConsumer>>> = parking_lot::RwLock::new(None);
+
+/// 全局广播采样率（用于重采样）
+static BROADCAST_SAMPLE_RATE: parking_lot::RwLock<u32> = parking_lot::RwLock::new(44100);
+
+/// 获取当前广播采样率（用于音频混音器重采样）
+pub fn broadcast_sample_rate() -> u32 {
+    *BROADCAST_SAMPLE_RATE.read()
+}
+
+/// 设置广播采样率
+fn set_broadcast_sample_rate(sample_rate: u32) {
+    *BROADCAST_SAMPLE_RATE.write() = sample_rate;
+}
+
+/// 获取全局广播音频消费者（用于音频混音器）
+///
+/// 返回 Arc 克隆，正确处理引用计数，确保内存安全。
+pub fn broadcast_consumer() -> Arc<BroadcastConsumer> {
+    let guard = BROADCAST_CONSUMER.read();
+    match guard.as_ref() {
+        Some(consumer) => consumer.clone(),
+        None => {
+            drop(guard);
+            tracing::error!("广播消费者未初始化");
+            let ringbuf = ringbuf::HeapRb::<f32>::new(1);
+            let (_prod, consumer) = ringbuf.split();
+            Arc::new(BroadcastConsumer { consumer: std::cell::UnsafeCell::new(consumer) })
+        }
+    }
+}
+
+/// 设置全局广播音频消费者
+fn set_broadcast_consumer(consumer: Arc<BroadcastConsumer>) {
+    let mut guard = BROADCAST_CONSUMER.write();
+    *guard = Some(consumer);
+}
 
 /// 查询超时时间（毫秒）
 const QUERY_TIMEOUT_MS: u64 = 1000;
@@ -97,6 +138,8 @@ pub enum AudioMessage {
     BroadcastDataF32 { samples: Vec<f32> },
     /// 推送广播音频数据 (字节)
     BroadcastBytes { data: Vec<u8> },
+    /// 重新配置广播引擎
+    ReconfigureBroadcast { codec: String, sample_rate: u32, channels: u16 },
 
     // === 生命周期 ===
     /// 关闭 Actor
@@ -375,6 +418,11 @@ impl AudioActor {
         self.send(AudioMessage::BroadcastBytes { data });
     }
 
+    /// 重新配置广播引擎
+    pub fn reconfigure_broadcast(&self, codec: String, sample_rate: u32, channels: u16) {
+        self.send(AudioMessage::ReconfigureBroadcast { codec, sample_rate, channels });
+    }
+
     /// 获取播放列表项
     pub fn get_playlist_items(&self) -> Vec<PlaylistItemDto> {
         let (reply_tx, reply_rx) = unbounded();
@@ -451,8 +499,8 @@ struct AudioActorCore {
     mixer: AudioMixer,
     /// 音乐引擎
     music_engine: Arc<MusicEngine>,
-    /// 广播引擎
-    broadcast_engine: Arc<parking_lot::RwLock<BroadcastEngine>>,
+    /// 广播引擎（无锁版本，仅在 Actor 线程访问）
+    broadcast_engine: BroadcastEngineLockFree,
     /// 播放列表（共享）
     playlist: Arc<Playlist>,
     /// 当前状态
@@ -514,14 +562,20 @@ impl AudioActorCore {
             }
         }
 
-        // 创建广播引擎
-        let broadcast_engine = Arc::new(parking_lot::RwLock::new(BroadcastEngine::new(
+        // 创建无锁广播引擎（内部管理环形缓冲区）
+        // 使用 create 方法同时创建引擎和消费者
+        let (mut broadcast_engine, consumer) = BroadcastEngineLockFree::create(
             config.broadcast.sample_rate,
             config.broadcast.channels,
             config.broadcast.codec.clone(),
-        )));
+            500, // 500ms 缓冲区（减少溢出断续）
+        );
         // 设置广播音量
-        broadcast_engine.write().set_volume(config.runtime.broadcast_volume);
+        broadcast_engine.set_volume(config.runtime.broadcast_volume);
+
+        // 设置全局消费者和采样率（供音频回调线程使用）
+        set_broadcast_sample_rate(config.broadcast.sample_rate);
+        set_broadcast_consumer(Arc::new(consumer));
 
         // 创建音乐引擎（使用 runtime 配置的音量和共享播放列表）
         let music_engine = Arc::new(MusicEngine::with_ducking_and_playlist(
@@ -538,7 +592,6 @@ impl AudioActorCore {
 
         // 创建混音器（这会创建 cpal::Stream，必须在当前线程）
         let mixer = AudioMixer::new(
-            broadcast_engine.clone(),
             music_engine.clone(),
             mixer_control.clone(),
             config.runtime.ducking_volume,
@@ -644,7 +697,7 @@ impl AudioActorCore {
                 self.update_cache(cache);
             }
             AudioMessage::SetBroadcastVolume(v) => {
-                self.broadcast_engine.write().set_volume(v);
+                self.broadcast_engine.set_volume(v);
                 self.state.broadcast_volume = v;
                 self.update_cache(cache);
             }
@@ -663,9 +716,11 @@ impl AudioActorCore {
                 self.update_cache(cache);
             }
             AudioMessage::StopDucking => {
+                tracing::info!("Audio Actor 收到 StopDucking 消息");
                 self.music_engine.stop_ducking();
                 self.state.is_ducking = false;
                 self.mixer_control.lock().is_ducking = false;
+                tracing::info!("Audio Actor 已停止闪避，is_ducking = {}", self.state.is_ducking);
                 self.update_cache(cache);
             }
             AudioMessage::SetDuckingEnabled(enabled) => {
@@ -788,7 +843,7 @@ impl AudioActorCore {
                 let bytes: Vec<u8> = samples.iter()
                     .flat_map(|s| s.to_le_bytes())
                     .collect();
-                if let Err(e) = self.broadcast_engine.write().receive_pcm(&bytes) {
+                if let Err(e) = self.broadcast_engine.receive_pcm(&bytes) {
                     tracing::warn!("广播数据接收失败: {}", e);
                 }
             }
@@ -797,14 +852,23 @@ impl AudioActorCore {
                 let bytes: Vec<u8> = samples.iter()
                     .flat_map(|s| ((*s * i16::MAX as f32) as i16).to_le_bytes())
                     .collect();
-                if let Err(e) = self.broadcast_engine.write().receive_pcm(&bytes) {
+                if let Err(e) = self.broadcast_engine.receive_pcm(&bytes) {
                     tracing::warn!("广播数据接收失败: {}", e);
                 }
             }
             AudioMessage::BroadcastBytes { data } => {
-                if let Err(e) = self.broadcast_engine.write().receive_pcm(&data) {
-                    tracing::warn!("广播数据接收失败: {}", e);
+                if let Err(e) = self.broadcast_engine.receive_pcm(&data) {
+                    tracing::warn!("广播数据处理失败: {}", e);
                 }
+            }
+            AudioMessage::ReconfigureBroadcast { codec, sample_rate, channels } => {
+                tracing::info!("重新配置广播: {}Hz", sample_rate);
+                // 更新全局广播采样率（用于混音器重采样）
+                set_broadcast_sample_rate(sample_rate);
+                // 重新配置广播引擎并获取新的消费者
+                let consumer = self.broadcast_engine.reconfigure(&codec, sample_rate, channels, 500);
+                // 更新全局消费者（可以多次更新）
+                set_broadcast_consumer(Arc::new(consumer));
             }
 
             // === 生命周期 ===

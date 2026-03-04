@@ -51,8 +51,6 @@ interface TauriServiceStatus {
   status: string
   state: string
   port: number
-  ws_port: number
-  http_port: number
   error: null
 }
 
@@ -62,8 +60,7 @@ export type PlayMode = 'sequential' | 'loop' | 'single_loop' | 'shuffle'
 /** 服务器配置 */
 export interface ServerConfig {
   bind_address: string
-  ws_port: number
-  http_port: number
+  port: number
   max_connections: number
 }
 

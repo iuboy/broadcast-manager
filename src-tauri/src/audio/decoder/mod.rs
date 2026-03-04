@@ -6,4 +6,4 @@
 
 pub mod opus;
 
-pub use opus::{OpusConfig, OpusDecoderEngine};
+// Opus 解码器仅供内部使用，不再导出

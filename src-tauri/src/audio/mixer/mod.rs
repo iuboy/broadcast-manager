@@ -10,4 +10,4 @@ mod ducker;
 mod mixer;
 
 pub use ducker::{AudioDucker, DuckState};
-pub use mixer::{AudioMixer, MixerState};
+pub use mixer::AudioMixer;

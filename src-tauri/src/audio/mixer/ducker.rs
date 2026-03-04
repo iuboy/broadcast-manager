@@ -123,6 +123,7 @@ impl AudioDucker {
     }
 
     /// 获取当前状态
+    #[allow(dead_code)]
     pub fn state(&self) -> DuckState {
         self.state
     }
