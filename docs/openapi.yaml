@@ -1,0 +1,350 @@
+openapi: 3.0.3
+info:
+  title: Broadcast Service API
+  description: |
+    广播服务管理器 API 文档
+    
+    本服务提供实时音频广播功能，支持多个客户端连接和音频流处理。
+    
+    ## 主要功能
+    - WebSocket 实时音频传输
+    - 广播状态管理
+    - 心跳保活机制
+    - 速率限制防护
+    
+    ## 连接要求
+    - 支持 PCM 和 Opus 编解码
+    - 采样率支持：8000, 16000, 24000, 44100, 48000 Hz
+    - 声道数支持：单声道(1) 或 立体声(2)
+  
+  version: 1.0.0
+  contact:
+    name: Broadcast Service Team
+  license:
+    name: MIT
+
+servers:
+  - url: ws://localhost:8081
+    description: 本地开发服务器
+  - url: ws://192.168.1.100:8081
+    description: 局域网服务器示例
+
+tags:
+  - name: Health
+    description: 健康检查端点
+  - name: WebSocket
+    description: WebSocket 实时通信
+  - name: Messages
+    description: 消息协议定义
+
+paths:
+  /api/health:
+    get:
+      tags:
+        - Health
+      summary: 健康检查
+      description: 检查服务运行状态
+      operationId: healthCheck
+      responses:
+        '200':
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  timestamp:
+                    type: integer
+                    format: int64
+                    description: Unix 时间戳（秒）
+
+  /ws:
+    get:
+      tags:
+        - WebSocket
+      summary: 建立 WebSocket 连接
+      description: |
+        建立 WebSocket 连接以进行实时音频传输。
+        
+        连接时可通过 URL 参数配置音频参数。
+      operationId: connectWebSocket
+      parameters:
+        - name: codec
+          in: query
+          description: 音频编解码格式
+          required: false
+          schema:
+            type: string
+            enum: [pcm, opus]
+            default: pcm
+        - name: sample_rate
+          in: query
+          description: 音频采样率
+          required: false
+          schema:
+            type: integer
+            enum: [8000, 16000, 24000, 44100, 48000]
+            default: 44100
+        - name: channels
+          in: query
+          description: 音频声道数
+          required: false
+          schema:
+            type: integer
+            enum: [1, 2]
+            default: 1
+      responses:
+        '101':
+          description: WebSocket 连接已建立
+        '400':
+          description: 参数错误
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: "参数错误: 不支持的采样率"
+
+components:
+  schemas:
+    # WebSocket 消息类型
+    WsMessage:
+      type: object
+      description: WebSocket 消息基类
+      required:
+        - type
+      properties:
+        type:
+          type: string
+          description: 消息类型
+    
+    # 客户端消息
+    StartBroadcastMessage:
+      type: string
+      enum: [start_broadcast]
+      description: 请求开始广播
+      example: start_broadcast
+    
+    StopBroadcastMessage:
+      type: string
+      enum: [stop_broadcast]
+      description: 请求停止广播
+      example: stop_broadcast
+    
+    HeartbeatMessage:
+      type: string
+      enum: [heartbeat]
+      description: 心跳包，客户端每 5 秒发送一次
+      example: heartbeat
+    
+    # 服务端消息
+    ReadyMessage:
+      type: string
+      enum: [ready]
+      description: 连接就绪消息，连接建立后立即发送
+      example: ready
+    
+    BroadcastingMessage:
+      type: string
+      enum: [broadcasting]
+      description: 广播已开始，客户端可以发送音频数据
+      example: broadcasting
+    
+    IdleMessage:
+      type: string
+      enum: [idle]
+      description: 广播已结束，服务端进入空闲状态
+      example: idle
+    
+    PongMessage:
+      type: string
+      enum: [pong]
+      description: 心跳响应
+      example: pong
+    
+    ErrorMessage:
+      type: string
+      pattern: '^error:.+'
+      description: 错误消息
+      example: "error:已有客户端正在广播"
+    
+    # 状态信息
+    BroadcastState:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [idle, broadcasting]
+          description: 当前广播状态
+        current_broadcaster:
+          type: string
+          nullable: true
+          description: 当前广播客户端 ID
+        client_count:
+          type: integer
+          minimum: 0
+          description: 连接的客户端数量
+        broadcast_duration_secs:
+          type: number
+          nullable: true
+          description: 广播持续时间（秒）
+
+  message: 
+    # WebSocket 消息示例
+    clientToServerMessages:
+      start_broadcast:
+        summary: 请求开始广播
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "start_broadcast"
+      stop_broadcast:
+        summary: 请求停止广播
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "stop_broadcast"
+      heartbeat:
+        summary: 心跳保活
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "heartbeat"
+      audio_data:
+        summary: 音频数据
+        description: |
+          二进制音频数据帧
+          - PCM 格式：原始音频采样
+          - Opus 格式：编码后的音频包
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+    
+    serverToClientMessages:
+      ready:
+        summary: 连接就绪
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "ready"
+      broadcasting:
+        summary: 广播已批准
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "broadcasting"
+      idle:
+        summary: 广播已结束
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "idle"
+      pong:
+        summary: 心跳响应
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "pong"
+      error:
+        summary: 错误响应
+        content:
+          text/plain:
+            schema:
+              type: string
+              example: "error:已有客户端正在广播"
+
+# 安全配置
+security: []
+
+# 额外说明
+x-websocket-options:
+  # 心跳配置
+  heartbeat:
+    interval: 5
+    timeout: 10
+    description: 客户端每 5 秒发送心跳，服务端 10 秒无活动则断开
+  
+  # 速率限制
+  rateLimit:
+    maxMessagesPerSecond: 200
+    windowSeconds: 2
+    description: 每 2 秒最多 200 条消息
+  
+  # 数据包限制
+  packetSize:
+    maxAudioPacketSize: 192000
+    description: 最大音频数据包 192KB
+  
+  # 连接限制
+  connection:
+    maxConnections: 10
+    description: 最大并发连接数
+
+x-code-samples:
+  - lang: JavaScript
+    label: JavaScript/WebSocket
+    source: |
+      const ws = new WebSocket('ws://localhost:8081/ws?codec=pcm&sample_rate=44100&channels=1');
+      
+      ws.onopen = () => {
+        console.log('Connected');
+      };
+      
+      ws.onmessage = (event) => {
+        const msg = event.data;
+        if (msg === 'ready') {
+          // 请求开始广播
+          ws.send('start_broadcast');
+        } else if (msg === 'broadcasting') {
+          // 开始发送音频数据
+          sendAudioData();
+        } else if (msg.startsWith('error:')) {
+          console.error('Error:', msg);
+        }
+      };
+      
+      // 心跳保活
+      setInterval(() => {
+        ws.send('heartbeat');
+      }, 5000);
+  
+  - lang: Python
+    label: Python/WebSocket
+    source: |
+      import asyncio
+      import websockets
+      import json
+      
+      async def connect():
+          uri = "ws://localhost:8081/ws?codec=pcm&sample_rate=44100&channels=1"
+          async with websockets.connect(uri) as ws:
+              # 等待 ready 消息
+              ready = await ws.recv()
+              assert ready == "ready"
+              
+              # 请求开始广播
+              await ws.send("start_broadcast")
+              
+              # 接收响应
+              response = await ws.recv()
+              if response == "broadcasting":
+                  # 发送音频数据
+                  await ws.send(audio_data)
+              
+              # 心跳
+              while True:
+                  await asyncio.sleep(5)
+                  await ws.send("heartbeat")
+      
+      asyncio.run(connect())

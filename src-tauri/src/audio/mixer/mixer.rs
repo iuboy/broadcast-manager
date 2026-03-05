@@ -22,6 +22,7 @@ use crate::error::{AudioError, AudioResult};
 ///
 /// 将音频从输入采样率转换到输出采样率。
 /// 使用线性插值算法，简单快速，适合实时音频处理。
+#[allow(clippy::needless_range_loop)]
 fn resample_linear(input: &[f32], input_rate: u32, output_rate: u32, output: &mut [f32]) {
     if input_rate == output_rate {
         // 采样率相同，直接复制
@@ -206,6 +207,7 @@ impl AudioMixer {
     }
 
     /// F32 格式混音
+    #[allow(clippy::needless_range_loop)]
     fn mix_audio_f32(
         data: &mut [f32],
         mixer_control: &Arc<Mutex<MixerControl>>,
@@ -278,6 +280,7 @@ impl AudioMixer {
     }
 
     /// I16 格式混音
+    #[allow(clippy::needless_range_loop)]
     fn mix_audio_i16(
         data: &mut [i16],
         mixer_control: &Arc<Mutex<MixerControl>>,
@@ -337,17 +340,20 @@ impl AudioMixer {
         let mut music_buffer = vec![0.0f32; data.len()];
         music_engine.read_samples(&mut music_buffer);
 
-        // 混音并转换为 i16
+        // 混音并转换为 i16（添加削波保护防止溢出）
         for i in 0..data.len() {
             let broadcast = broadcast_buffer[i];
             let music = music_buffer[i];
             let mixed = broadcast + music;
-            let sample = (mixed * master_vol * i16::MAX as f32) as i16;
+            // 先应用主音量，然后限制在 [-1.0, 1.0] 范围内，防止 i16 溢出
+            let clamped = (mixed * master_vol).clamp(-1.0, 1.0);
+            let sample = (clamped * i16::MAX as f32) as i16;
             data[i] = sample;
         }
     }
 
     /// U16 格式混音
+    #[allow(clippy::needless_range_loop)]
     fn mix_audio_u16(
         data: &mut [u16],
         mixer_control: &Arc<Mutex<MixerControl>>,

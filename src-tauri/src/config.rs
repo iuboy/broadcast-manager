@@ -3,6 +3,44 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 
+
+
+/// 日志级别配置
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum LogLevelConfig {
+    Trace,
+    Debug,
+    #[default]
+    Info,
+    Warn,
+    Error,
+}
+
+impl std::fmt::Display for LogLevelConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Trace => write!(f, "trace"),
+            Self::Debug => write!(f, "debug"),
+            Self::Info => write!(f, "info"),
+            Self::Warn => write!(f, "warn"),
+            Self::Error => write!(f, "error"),
+        }
+    }
+}
+
+impl From<LogLevelConfig> for tracing::Level {
+    fn from(level: LogLevelConfig) -> Self {
+        match level {
+            LogLevelConfig::Trace => Self::TRACE,
+            LogLevelConfig::Debug => Self::DEBUG,
+            LogLevelConfig::Info => Self::INFO,
+            LogLevelConfig::Warn => Self::WARN,
+            LogLevelConfig::Error => Self::ERROR,
+        }
+    }
+}
+
 /// 认证配置
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct AuthConfig {
@@ -12,6 +50,18 @@ pub struct AuthConfig {
     /// 本地 IP 地址列表
     #[serde(default = "default_local_addresses")]
     pub local_addresses: Vec<String>,
+}
+
+/// 客户端白名单配置（用于控制哪些客户端可以发起广播请求）
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct ClientWhitelistConfig {
+    /// 是否启用白名单检查
+    #[serde(default)]
+    pub enabled: bool,
+    /// 允许发起广播请求的客户端 IP 地址列表
+    /// 环回地址（127.0.0.1, ::1, localhost）总是被允许，无需显式列出
+    #[serde(default)]
+    pub allowed_addresses: Vec<String>,
 }
 
 fn default_auth_enabled() -> bool {
@@ -48,6 +98,12 @@ pub struct ServerConfig {
     pub cors: CorsConfig,
     #[serde(default)]
     pub auth: AuthConfig,
+    /// 客户端白名单配置（用于控制广播请求）
+    #[serde(default)]
+    pub client_whitelist: ClientWhitelistConfig,
+    /// 日志级别配置
+    #[serde(default)]
+    pub log_level: LogLevelConfig,
 }
 
 fn default_port() -> u16 {
@@ -75,6 +131,9 @@ pub struct CorsConfig {
 
 impl Default for CorsConfig {
     fn default() -> Self {
+        // 安全警告：允许所有来源的跨域请求（*）对于桌面应用风险较低，
+        // 因为应用运行在用户信任的环境中。如果需要在公网部署服务，
+        // 建议将 allowed_origins 修改为具体的域名列表。
         Self {
             allowed_origins: vec!["*".to_string()],
             allowed_methods: None,
@@ -167,12 +226,12 @@ pub struct Config {
 impl Config {
     /// 从文件加载配置
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        // 从用户配置目录加载
-        let config_dir = dirs::config_dir()
-            .ok_or("无法获取配置目录")?;
+        // 使用统一的配置目录 ~/.broadcast-service/
+        let config_dir = dirs::home_dir()
+            .map(|home| home.join(".broadcast-service"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".broadcast-service"));
 
-        let app_config_dir = config_dir.join("broadcast-manager");
-        let config_file = app_config_dir.join("config.toml");
+        let config_file = config_dir.join("broadcast-manager-config.toml");
 
         // 如果配置文件不存在，返回默认配置
         if !config_file.exists() {
@@ -186,7 +245,7 @@ impl Config {
         // 解析 TOML
         let config: Config = toml::from_str(&content)?;
 
-        tracing::info!("配置已从 {:?} 加载", config_file);
+        tracing::info!("配置已从 {:?} 加载", &config_file);
         Ok(config)
     }
 
@@ -199,19 +258,40 @@ impl Config {
 
     /// 保存配置到文件
     pub fn save(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let config_dir = dirs::config_dir()
-            .ok_or("无法获取配置目录")?;
+        // 使用统一的配置目录 ~/.broadcast-service/
+        let config_dir = dirs::home_dir()
+            .map(|home| home.join(".broadcast-service"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".broadcast-service"));
 
-        let app_config_dir = config_dir.join("broadcast-manager");
-        fs::create_dir_all(&app_config_dir)?;
+        fs::create_dir_all(&config_dir)?;
 
-        let config_file = app_config_dir.join("config.toml");
+        // 设置目录权限为 0700（仅所有者可访问）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(&config_dir).map(|m| m.permissions()) {
+                perms.set_mode(0o700);
+                let _ = std::fs::set_permissions(&config_dir, perms);
+            }
+        }
+
+        let config_file = config_dir.join("broadcast-manager-config.toml");
         let toml_str = toml::to_string_pretty(self)?;
 
-        let mut file = fs::File::create(config_file)?;
+        let mut file = fs::File::create(&config_file)?;
         file.write_all(toml_str.as_bytes())?;
 
-        tracing::info!("配置已保存到 {:?}", app_config_dir);
+        // 设置文件权限为 0600（仅所有者可读写）
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(mut perms) = std::fs::metadata(&config_file).map(|m| m.permissions()) {
+                perms.set_mode(0o600);
+                let _ = std::fs::set_permissions(&config_file, perms);
+            }
+        }
+
+        tracing::info!("配置已保存到 {:?}", &config_file);
         Ok(())
     }
 }
@@ -225,6 +305,8 @@ impl Default for Config {
                 max_connections: 10,
                 cors: CorsConfig::default(),
                 auth: AuthConfig::default(),
+                client_whitelist: ClientWhitelistConfig::default(),
+                log_level: LogLevelConfig::default(),
             },
             ducking: DuckingConfig {
                 enabled: true,

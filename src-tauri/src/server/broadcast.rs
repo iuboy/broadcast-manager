@@ -1,21 +1,37 @@
+//! # 广播管理器模块
+//!
+//! 管理广播状态和客户端连接。
+//!
+//! ## 功能
+//! - 客户端连接管理
+//! - 广播状态控制（空闲/广播中）
+//! - 广播者唯一性保证
+//! - 客户端活动跟踪
+//!
+//! ## 广播流程
+//! 1. 客户端连接 → `add_client()`
+//! 2. 请求广播 → `request_broadcast()`
+//! 3. 服务端检查是否已有广播者
+//! 4. 如果空闲，批准请求并更新状态
+//! 5. 广播结束或断开 → `end_broadcast()` / `remove_client()`
+//!
+//! ## 注意
+//! 不支持断线重连，客户端断开后广播状态会立即清理。
+
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use uuid::Uuid;
-
-/// 会话超时时间（秒）
-#[allow(dead_code)]
-const SESSION_TIMEOUT_SECS: u64 = 300; // 5 分钟
 
 /// 广播客户端信息
 #[derive(Debug, Clone)]
 pub struct BroadcastClient {
     #[allow(dead_code)]
     pub id: String,
+    // connected_at 字段保留用于调试和监控
     #[allow(dead_code)]
     pub connected_at: Instant,
     pub last_activity: Instant,
-    pub session_token: String,
 }
 
 /// 广播状态
@@ -28,14 +44,6 @@ pub enum BroadcastState {
 
 use serde::{Deserialize, Serialize};
 
-/// 会话信息（用于重连）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionInfo {
-    pub client_id: String,
-    pub session_token: String,
-    pub was_broadcaster: bool,
-}
-
 /// 广播管理器
 pub struct BroadcastManager {
     /// 当前状态
@@ -46,8 +54,6 @@ pub struct BroadcastManager {
     broadcast_start: RwLock<Option<Instant>>,
     /// 所有连接的客户端
     clients: RwLock<HashMap<String, BroadcastClient>>,
-    /// 断开客户端的会话缓存（用于重连）
-    session_cache: RwLock<HashMap<String, (SessionInfo, Instant)>>,
     /// 最大连接数
     max_connections: usize,
 }
@@ -59,7 +65,6 @@ impl BroadcastManager {
             current_broadcaster: RwLock::new(None),
             broadcast_start: RwLock::new(None),
             clients: RwLock::new(HashMap::new()),
-            session_cache: RwLock::new(HashMap::new()),
             max_connections,
         }
     }
@@ -72,7 +77,6 @@ impl BroadcastManager {
         }
 
         let id = Uuid::new_v4().to_string();
-        let session_token = Uuid::new_v4().to_string();
         let now = Instant::now();
 
         clients.insert(
@@ -81,7 +85,6 @@ impl BroadcastManager {
                 id: id.clone(),
                 connected_at: now,
                 last_activity: now,
-                session_token: session_token.clone(),
             },
         );
 
@@ -89,89 +92,13 @@ impl BroadcastManager {
         Ok(id)
     }
 
-    /// 客户端重连（使用之前的会话）
-    #[allow(dead_code)]
-    pub fn reconnect_client(&self, session_token: &str) -> Result<String, String> {
-        // 清理过期会话
-        self.cleanup_expired_sessions();
-
-        // 查找会话缓存
-        let mut cache = self.session_cache.write();
-        if let Some((session_info, _)) = cache.remove(session_token) {
-            let mut clients = self.clients.write();
-            if clients.len() >= self.max_connections {
-                return Err("已达到最大连接数".to_string());
-            }
-
-            let client_id = session_info.client_id.clone();
-            let new_session_token = Uuid::new_v4().to_string();
-            let now = Instant::now();
-
-            clients.insert(
-                client_id.clone(),
-                BroadcastClient {
-                    id: client_id.clone(),
-                    connected_at: now,
-                    last_activity: now,
-                    session_token: new_session_token.clone(),
-                },
-            );
-
-            // 如果之前是广播者，自动恢复广播
-            if session_info.was_broadcaster {
-                *self.state.write() = BroadcastState::Broadcasting;
-                *self.current_broadcaster.write() = Some(client_id.clone());
-                *self.broadcast_start.write() = Some(Instant::now());
-                tracing::info!("客户端 {} 重连并恢复广播", client_id);
-            }
-
-            tracing::info!(
-                "客户端重连: {}, 当前连接数: {}",
-                client_id,
-                clients.len()
-            );
-            return Ok(client_id);
-        }
-
-        Err("无效或过期的会话令牌".to_string())
-    }
-
     /// 移除客户端
     pub fn remove_client(&self, id: &str) {
         let mut clients = self.clients.write();
-        if let Some(client) = clients.remove(id) {
+        if clients.remove(id).is_some() {
             tracing::info!("客户端断开: {}, 剩余连接数: {}", id, clients.len());
-
-            // 检查是否是当前广播者
-            let was_broadcaster = self.is_broadcaster(id);
-
-            // 保存会话到缓存（允许重连）
-            let session_info = SessionInfo {
-                client_id: id.to_string(),
-                session_token: client.session_token.clone(),
-                was_broadcaster,
-            };
-            self.session_cache
-                .write()
-                .insert(client.session_token, (session_info, Instant::now()));
-
-            // 如果是当前广播者断开，不立即清理状态（允许重连）
-            if was_broadcaster {
-                tracing::info!("广播者断开连接，等待重连...");
-                // 设置一个短暂的等待时间，不立即清除广播状态
-                // 实际的重连逻辑由客户端在超时前发起
-            }
         }
-
-        // 如果是当前广播者断开，清理状态
-        {
-            let mut broadcaster = self.current_broadcaster.write();
-            if broadcaster.as_deref() == Some(id) {
-                *broadcaster = None;
-                *self.state.write() = BroadcastState::Idle;
-                tracing::info!("广播者断开连接，广播结束");
-            }
-        }
+        // 注意：广播状态的清理由 websocket.rs 的 handle_socket 统一处理
     }
 
     /// 更新客户端活动时间
@@ -182,51 +109,33 @@ impl BroadcastManager {
         }
     }
 
-    /// 清理过期会话
-    #[allow(dead_code)]
-    pub fn cleanup_expired_sessions(&self) {
-        let mut cache = self.session_cache.write();
-        let now = Instant::now();
-        let timeout = Duration::from_secs(SESSION_TIMEOUT_SECS);
-
-        cache.retain(|_, (_, disconnected_at)| {
-            now.duration_since(*disconnected_at) < timeout
-        });
-    }
-
-    /// 获取会话令牌（用于客户端保存以便重连）
-    #[allow(dead_code)]
-    pub fn get_session_token(&self, client_id: &str) -> Option<String> {
-        let clients = self.clients.read();
-        clients.get(client_id).map(|c| c.session_token.clone())
-    }
-
     /// 请求开始广播
+    ///
+    /// 使用单一写锁进行原子操作，防止 TOCTOU 竞态条件。
     pub fn request_broadcast(&self, client_id: &str) -> Result<(), String> {
-        // 先检查是否正在广播
-        {
-            let state = self.state.read();
-            if *state == BroadcastState::Broadcasting {
-                let broadcaster = self.current_broadcaster.read();
-                return Err(format!(
-                    "已有客户端正在广播: {}",
-                    broadcaster.as_deref().unwrap_or("unknown")
-                ));
-            }
-        } // 读锁在这里释放
+        // 使用写锁进行原子操作，避免多次锁释放导致的竞态窗口
+        let mut state = self.state.write();
+        let mut broadcaster = self.current_broadcaster.write();
+        let mut broadcast_start = self.broadcast_start.write();
+        let clients = self.clients.read();
+
+        // 检查是否正在广播
+        if *state == BroadcastState::Broadcasting {
+            return Err(format!(
+                "已有客户端正在广播: {}",
+                broadcaster.as_deref().unwrap_or("unknown")
+            ));
+        }
 
         // 验证客户端存在
-        {
-            let clients = self.clients.read();
-            if !clients.contains_key(client_id) {
-                return Err("客户端不存在".to_string());
-            }
-        } // 读锁在这里释放
+        if !clients.contains_key(client_id) {
+            return Err("客户端不存在".to_string());
+        }
 
-        // 开始广播（获取写锁）
-        *self.state.write() = BroadcastState::Broadcasting;
-        *self.current_broadcaster.write() = Some(client_id.to_string());
-        *self.broadcast_start.write() = Some(Instant::now());
+        // 开始广播（在同一原子操作中更新所有状态）
+        *state = BroadcastState::Broadcasting;
+        *broadcaster = Some(client_id.to_string());
+        *broadcast_start = Some(Instant::now());
 
         tracing::info!("客户端 {} 开始广播", client_id);
         Ok(())
@@ -253,11 +162,13 @@ impl BroadcastManager {
     }
 
     /// 是否正在广播
+    #[allow(dead_code)]
     pub fn is_broadcasting(&self) -> bool {
         *self.state.read() == BroadcastState::Broadcasting
     }
 
     /// 获取当前广播者
+    #[allow(dead_code)]
     pub fn current_broadcaster(&self) -> Option<String> {
         self.current_broadcaster.read().clone()
     }
@@ -283,6 +194,12 @@ impl BroadcastManager {
             == Some(client_id)
     }
 
+    /// 原子检查：客户端是否正在广播（防止竞态条件）
+    pub fn is_broadcasting_and_broadcaster(&self, client_id: &str) -> bool {
+        let broadcaster = self.current_broadcaster.read();
+        broadcaster.as_deref() == Some(client_id)
+    }
+
     /// 获取所有客户端 ID
     #[allow(dead_code)]
     pub fn get_client_ids(&self) -> Vec<String> {
@@ -299,5 +216,179 @@ impl BroadcastManager {
 impl Default for BroadcastManager {
     fn default() -> Self {
         Self::new(10)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_broadcast_manager_new() {
+        let manager = BroadcastManager::new(5);
+        assert_eq!(manager.client_count(), 0);
+        assert!(!manager.is_broadcasting());
+        assert_eq!(manager.state(), BroadcastState::Idle);
+    }
+
+    #[test]
+    fn test_add_client() {
+        let manager = BroadcastManager::new(2);
+        
+        let id1 = manager.add_client();
+        assert!(id1.is_ok());
+        assert_eq!(manager.client_count(), 1);
+        
+        let id2 = manager.add_client();
+        assert!(id2.is_ok());
+        assert_eq!(manager.client_count(), 2);
+    }
+
+    #[test]
+    fn test_max_connections() {
+        let manager = BroadcastManager::new(2);
+        
+        let _id1 = manager.add_client().unwrap();
+        let _id2 = manager.add_client().unwrap();
+        
+        let id3 = manager.add_client();
+        assert!(id3.is_err());
+        assert!(id3.unwrap_err().contains("最大连接数"));
+    }
+
+    #[test]
+    fn test_remove_client() {
+        let manager = BroadcastManager::new(10);
+        
+        let id = manager.add_client().unwrap();
+        assert_eq!(manager.client_count(), 1);
+        assert!(manager.has_client(&id));
+        
+        manager.remove_client(&id);
+        assert_eq!(manager.client_count(), 0);
+        assert!(!manager.has_client(&id));
+    }
+
+    #[test]
+    fn test_request_broadcast_success() {
+        let manager = BroadcastManager::new(10);
+        let id = manager.add_client().unwrap();
+        
+        let result = manager.request_broadcast(&id);
+        assert!(result.is_ok());
+        assert!(manager.is_broadcasting());
+        assert_eq!(manager.current_broadcaster(), Some(id));
+    }
+
+    #[test]
+    fn test_request_broadcast_already_broadcasting() {
+        let manager = BroadcastManager::new(10);
+        let id1 = manager.add_client().unwrap();
+        let id2 = manager.add_client().unwrap();
+        
+        manager.request_broadcast(&id1).unwrap();
+        
+        let result = manager.request_broadcast(&id2);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("已有客户端正在广播"));
+    }
+
+    #[test]
+    fn test_request_broadcast_nonexistent_client() {
+        let manager = BroadcastManager::new(10);
+        
+        let result = manager.request_broadcast("nonexistent");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("客户端不存在"));
+    }
+
+    #[test]
+    fn test_end_broadcast() {
+        let manager = BroadcastManager::new(10);
+        let id = manager.add_client().unwrap();
+        
+        manager.request_broadcast(&id).unwrap();
+        assert!(manager.is_broadcasting());
+        
+        manager.end_broadcast(&id);
+        assert!(!manager.is_broadcasting());
+        assert_eq!(manager.current_broadcaster(), None);
+    }
+
+    #[test]
+    fn test_is_broadcaster() {
+        let manager = BroadcastManager::new(10);
+        let id1 = manager.add_client().unwrap();
+        let id2 = manager.add_client().unwrap();
+        
+        manager.request_broadcast(&id1).unwrap();
+        
+        assert!(manager.is_broadcaster(&id1));
+        assert!(!manager.is_broadcaster(&id2));
+    }
+
+    #[test]
+    fn test_update_activity() {
+        let manager = BroadcastManager::new(10);
+        let id = manager.add_client().unwrap();
+        
+        // This test mainly verifies the method exists and doesn't panic
+        manager.update_activity(&id);
+        assert!(manager.has_client(&id));
+    }
+
+    #[test]
+    fn test_get_client_ids() {
+        let manager = BroadcastManager::new(10);
+        
+        let id1 = manager.add_client().unwrap();
+        let id2 = manager.add_client().unwrap();
+        
+        let ids = manager.get_client_ids();
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&id1));
+        assert!(ids.contains(&id2));
+    }
+
+    #[test]
+    fn test_broadcast_duration() {
+        let manager = BroadcastManager::new(10);
+        let id = manager.add_client().unwrap();
+        
+        // Initially no duration
+        assert!(manager.broadcast_duration_secs().is_none());
+        
+        manager.request_broadcast(&id).unwrap();
+        
+        // After broadcast starts, we should have a duration
+        let duration = manager.broadcast_duration_secs();
+        assert!(duration.is_some());
+        assert!(duration.unwrap() >= 0.0);
+    }
+
+    #[test]
+    fn test_default() {
+        let manager = BroadcastManager::default();
+        assert_eq!(manager.client_count(), 0);
+        assert!(!manager.is_broadcasting());
+    }
+
+    #[test]
+    fn test_multiple_broadcasts_sequential() {
+        let manager = BroadcastManager::new(10);
+        let id1 = manager.add_client().unwrap();
+        let id2 = manager.add_client().unwrap();
+        
+        // First broadcast
+        manager.request_broadcast(&id1).unwrap();
+        assert_eq!(manager.current_broadcaster(), Some(id1.clone()));
+        
+        // End first broadcast
+        manager.end_broadcast(&id1);
+        assert_eq!(manager.current_broadcaster(), None);
+        
+        // Second broadcast
+        manager.request_broadcast(&id2).unwrap();
+        assert_eq!(manager.current_broadcaster(), Some(id2));
     }
 }

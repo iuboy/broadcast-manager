@@ -8,10 +8,12 @@ use super::metadata::read_audio_metadata;
 /// 播放模式
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PlayMode {
     /// 顺序播放
     Sequential,
     /// 循环播放
+    #[default]
     Loop,
     /// 单曲循环
     SingleLoop,
@@ -19,11 +21,6 @@ pub enum PlayMode {
     Shuffle,
 }
 
-impl Default for PlayMode {
-    fn default() -> Self {
-        Self::Loop
-    }
-}
 
 /// 播放列表项
 #[derive(Debug, Clone, Serialize, Deserialize)]

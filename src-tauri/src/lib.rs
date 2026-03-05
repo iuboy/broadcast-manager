@@ -1,7 +1,40 @@
-//! 广播服务管理器 - Tauri 应用入口
+//! # 广播服务管理器 - Tauri 应用库
 //!
-//! 内嵌广播服务，无需 Sidecar 依赖。
-//! 使用 Actor 模式管理音频子系统。
+//! 本模块提供 Tauri 应用的核心功能，包括内嵌广播服务和音频管理。
+//!
+//! ## 主要模块
+//! - `audio` - 音频子系统（Actor 模式）
+//! - `config` - 配置管理
+//! - `error` - 错误类型定义
+//! - `server` - WebSocket 和 HTTP 服务器
+//!
+//! ## Tauri 命令分类
+//!
+//! ### 音频控制
+//! - `get_audio_state` - 获取音频状态
+//! - `play_music` / `pause_music` / `stop_music` - 播放控制
+//! - `next_track` / `previous_track` - 切换曲目
+//! - `set_music_volume` / `set_broadcast_volume` / `set_master_volume` - 音量控制
+//!
+//! ### 闪避功能
+//! - `start_ducking` / `stop_ducking` - 启用/禁用闪避
+//! - `set_ducking_enabled` - 设置闪避开关
+//! - `set_ducking_volume` - 设置闪避音量
+//! - `set_ducking_fade_in_ms` / `set_ducking_fade_out_ms` - 设置淡入淡出时间
+//!
+//! ### 播放列表
+//! - `add_track` / `remove_track` / `clear_playlist` - 播放列表管理
+//! - `get_playlist` - 获取播放列表
+//! - `scan_directory` - 扫描目录添加音乐
+//!
+//! ### 服务器配置
+//! - `get_service_status` - 获取服务状态
+//! - `get_server_config` / `update_server_config` - 服务器配置
+//! - `reset_all_config` - 重置配置
+//!
+//! ### 自启动
+//! - `enable_autostart` / `disable_autostart` - 开机自启动控制
+//! - `is_autostart_enabled` - 检查自启动状态
 
 mod audio;
 mod config;
@@ -27,14 +60,27 @@ pub fn audio() -> &'static AudioActor {
     AUDIO_ACTOR.get().expect("Audio Actor not initialized")
 }
 
+/// 尝试获取音频 Actor，返回 Option（用于可能未初始化的场景）
+pub fn try_audio() -> Option<&'static AudioActor> {
+    AUDIO_ACTOR.get()
+}
+
 /// 获取全局配置
 pub fn get_config() -> &'static Arc<Mutex<Config>> {
     CONFIG.get().expect("Config not initialized")
 }
 
+/// 尝试获取全局配置，返回 Option（用于可能未初始化的场景）
+pub fn try_get_config() -> Option<&'static Arc<Mutex<Config>>> {
+    CONFIG.get()
+}
+
 /// 保存运行时配置
 fn save_config() -> Result<(), Box<dyn std::error::Error>> {
-    let config = get_config().lock().unwrap();
+    let config = try_get_config()
+        .ok_or("配置未初始化")?
+        .lock()
+        .map_err(|e| format!("获取配置锁失败: {}", e))?;
     let config_clone = (*config).clone();
     drop(config);
     config_clone.save()
@@ -45,7 +91,10 @@ fn update_config<F>(updater: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: FnOnce(&mut Config),
 {
-    let mut config = get_config().lock().unwrap();
+    let mut config = try_get_config()
+        .ok_or("配置未初始化")?
+        .lock()
+        .map_err(|e| format!("获取配置锁失败: {}", e))?;
     updater(&mut config);
     drop(config);
     save_config()
@@ -58,6 +107,49 @@ fn save_playlist_to_config() {
     if let Err(e) = update_config(|c| c.playlist = paths) {
         tracing::error!("保存播放列表到配置失败: {}", e);
     }
+}
+
+/// 检查客户端 IP 是否在白名单中
+///
+/// 环回地址（127.0.0.1, ::1, localhost）总是被允许
+/// 如果白名单未启用，也允许所有地址
+fn is_client_allowed(client_ip: &str) -> bool {
+    let config = get_config().lock().unwrap();
+    let whitelist = &config.server.client_whitelist;
+
+    // 如果未启用白名单，允许所有地址
+    if !whitelist.enabled {
+        return true;
+    }
+
+    // 硬编码允许的环回地址
+    let loopback_addresses = ["127.0.0.1", "::1", "localhost", "0.0.0.0"];
+
+    // 首先检查是否为环回地址
+    for loopback in &loopback_addresses {
+        if client_ip == *loopback {
+            return true;
+        }
+    }
+
+    // 检查是否在白名单中
+    for allowed in &whitelist.allowed_addresses {
+        if client_ip == allowed {
+            return true;
+        }
+
+        // 支持简单的 IP 段匹配（例如 192.168.1.）
+        if allowed.ends_with('.') && client_ip.starts_with(allowed) {
+            return true;
+        }
+
+        // 支持通配符 0.0.0.0 匹配所有地址
+        if allowed == "0.0.0.0" {
+            return true;
+        }
+    }
+
+    false
 }
 
 // ===== Tauri 命令 =====
@@ -147,34 +239,34 @@ fn set_ducking_enabled(enabled: bool) {
 /// 添加曲目
 #[tauri::command]
 fn add_track(path: String) {
-    audio().send(AudioMessage::AddTrack { path });
-    // 延迟保存，等待消息处理
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        save_playlist_to_config();
-    });
+    use crossbeam_channel::unbounded;
+    let (reply_tx, reply_rx) = unbounded();
+    audio().send(AudioMessage::AddTrack { path, reply: reply_tx });
+    // 等待消息处理完成，然后保存配置
+    let _ = reply_rx.recv_timeout(std::time::Duration::from_secs(1));
+    save_playlist_to_config();
 }
 
 /// 移除曲目
 #[tauri::command]
 fn remove_track(index: usize) {
-    audio().send(AudioMessage::RemoveTrack { index });
-    // 延迟保存，等待消息处理
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        save_playlist_to_config();
-    });
+    use crossbeam_channel::unbounded;
+    let (reply_tx, reply_rx) = unbounded();
+    audio().send(AudioMessage::RemoveTrack { index, reply: reply_tx });
+    // 等待消息处理完成，然后保存配置
+    let _ = reply_rx.recv_timeout(std::time::Duration::from_secs(1));
+    save_playlist_to_config();
 }
 
 /// 清空播放列表
 #[tauri::command]
 fn clear_playlist() {
-    audio().send(AudioMessage::ClearPlaylist);
-    // 延迟保存，等待消息处理
-    std::thread::spawn(|| {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        save_playlist_to_config();
-    });
+    use crossbeam_channel::unbounded;
+    let (reply_tx, reply_rx) = unbounded();
+    audio().send(AudioMessage::ClearPlaylist { reply: reply_tx });
+    // 等待消息处理完成，然后保存配置
+    let _ = reply_rx.recv_timeout(std::time::Duration::from_secs(1));
+    save_playlist_to_config();
 }
 
 /// 获取播放列表
@@ -199,11 +291,8 @@ fn set_play_mode(mode: String) -> Result<(), String> {
 #[tauri::command]
 fn scan_directory(path: String) -> Result<usize, String> {
     let count = audio().scan_directory(&path)?;
-    // 延迟保存，等待消息处理
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(500)); // 扫描需要更长时间
-        save_playlist_to_config();
-    });
+    // scan_directory 已经等待扫描完成，直接保存配置
+    save_playlist_to_config();
     Ok(count)
 }
 
@@ -249,16 +338,57 @@ fn get_server_config() -> ServerConfigDto {
         bind_address: config.server.bind_address.clone(),
         port: config.server.port,
         max_connections: config.server.max_connections,
+        whitelist_enabled: config.server.client_whitelist.enabled,
+        whitelist_addresses: config.server.client_whitelist.allowed_addresses.clone(),
     }
 }
 
 /// 更新服务器配置
 #[tauri::command]
 fn update_server_config(config_dto: ServerConfigDto) -> Result<(), String> {
+    // 验证端口范围
+    if config_dto.port == 0 {
+        return Err("端口号不能为 0".to_string());
+    }
+
+    // 验证最大连接数
+    if config_dto.max_connections == 0 {
+        return Err("最大连接数必须大于 0".to_string());
+    }
+    if config_dto.max_connections > 1000 {
+        return Err("最大连接数不能超过 1000".to_string());
+    }
+
+    // 验证绑定地址格式
+    if config_dto.bind_address.is_empty() {
+        return Err("绑定地址不能为空".to_string());
+    }
+    // 尝试解析为 IP 地址
+    if config_dto.bind_address != "0.0.0.0" &&
+       config_dto.bind_address != "localhost" &&
+       config_dto.bind_address.parse::<std::net::IpAddr>().is_err() {
+        return Err(format!("无效的绑定地址: {}", config_dto.bind_address));
+    }
+
+    // 验证白名单地址格式
+    for addr in &config_dto.whitelist_addresses {
+        if addr.is_empty() {
+            return Err("白名单地址不能为空".to_string());
+        }
+        // 尝试解析为 IP 地址或检查是否为 localhost
+        if addr != "localhost" &&
+           addr != "0.0.0.0" &&
+           addr.parse::<std::net::IpAddr>().is_err() {
+            return Err(format!("无效的白名单地址: {}", addr));
+        }
+    }
+
     update_config(|c| {
         c.server.bind_address = config_dto.bind_address;
         c.server.port = config_dto.port;
         c.server.max_connections = config_dto.max_connections;
+        c.server.client_whitelist.enabled = config_dto.whitelist_enabled;
+        c.server.client_whitelist.allowed_addresses = config_dto.whitelist_addresses;
     }).map_err(|e| e.to_string())
 }
 
@@ -317,13 +447,25 @@ struct ServerConfigDto {
     bind_address: String,
     port: u16,
     max_connections: usize,
+    /// 白名单是否启用
+    whitelist_enabled: bool,
+    /// 允许的客户端 IP 地址列表
+    whitelist_addresses: Vec<String>,
+}
+
+/// 白名单配置 DTO
+#[allow(dead_code)]
+#[derive(serde::Serialize, serde::Deserialize)]
+struct WhitelistConfigDto {
+    enabled: bool,
+    allowed_addresses: Vec<String>,
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 获取日志目录
     let log_dir = dirs::home_dir()
-        .map(|home| home.join(".broadcast-manager").join("logs"))
+        .map(|home| home.join(".broadcast-service").join("logs"))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
 
     // 确保日志目录存在
@@ -341,8 +483,11 @@ pub fn run() {
     let (non_blocking_appender, _guard) = tracing_appender::non_blocking(file_appender);
 
     // 配置日志订阅器 - 同时输出到控制台和文件
+    // 从配置读取日志级别，支持环境变量 RUST_LOG 覆盖
+    let config = crate::config::Config::load().unwrap_or_default();
+    let log_level: tracing::Level = config.server.log_level.into();
     let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive(tracing::Level::INFO.into());
+        .add_directive(log_level.into());
 
     // 控制台层
     let console_layer = tracing_subscriber::fmt::layer()
@@ -367,6 +512,38 @@ pub fn run() {
 
     tracing::info!("广播服务管理器启动中...");
     tracing::info!("日志文件: {:?}", log_path);
+
+    // 启动日志清理任务（保留最近 7 天的日志）
+    let log_dir_clone = log_dir.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3600)); // 每小时检查一次
+        loop {
+            interval.tick().await;
+            if let Ok(entries) = std::fs::read_dir(&log_dir_clone) {
+                let now = std::time::SystemTime::now();
+                let max_age = std::time::Duration::from_secs(7 * 24 * 3600); // 7 天
+
+                for entry in entries.filter_map(Result::ok) {
+                    if let Ok(metadata) = entry.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            if let Ok(age) = now.duration_since(modified) {
+                                if age > max_age {
+                                    let path = entry.path();
+                                    let path_str = path.to_string_lossy();
+                                    // 只删除 .log 或 .log.* 文件
+                                    if path.extension().map(|s| s.to_string_lossy()).unwrap_or_default() == "log" ||
+                                       path_str.ends_with(".log") {
+                                        let _ = std::fs::remove_file(&path);
+                                        tracing::info!("清理过期日志文件: {:?}", path);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
 
     // 保留 _guard 以防止文件日志过早关闭
     std::mem::forget(_guard);

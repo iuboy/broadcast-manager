@@ -119,11 +119,11 @@ pub enum AudioMessage {
 
     // === 播放列表 ===
     /// 添加曲目
-    AddTrack { path: String },
+    AddTrack { path: String, reply: Sender<()> },
     /// 移除曲目
-    RemoveTrack { index: usize },
+    RemoveTrack { index: usize, reply: Sender<()> },
     /// 清空播放列表
-    ClearPlaylist,
+    ClearPlaylist { reply: Sender<()> },
     /// 设置播放列表
     SetPlaylist { tracks: Vec<String> },
     /// 设置播放模式
@@ -750,24 +750,27 @@ impl AudioActorCore {
             }
 
             // === 播放列表 ===
-            AudioMessage::AddTrack { path } => {
+            AudioMessage::AddTrack { path, reply } => {
                 let item = PlaylistItem::from_path(PathBuf::from(&path));
                 self.playlist.add(item);
                 self.state.playlist_length = self.playlist.len();
                 self.update_cache(cache);
+                let _ = reply.send(());
             }
-            AudioMessage::RemoveTrack { index } => {
+            AudioMessage::RemoveTrack { index, reply } => {
                 let items = self.playlist.items();
                 if let Some(item) = items.get(index) {
                     self.playlist.remove(&item.id);
                     self.state.playlist_length = self.playlist.len();
                     self.update_cache(cache);
                 }
+                let _ = reply.send(());
             }
-            AudioMessage::ClearPlaylist => {
+            AudioMessage::ClearPlaylist { reply } => {
                 self.playlist.clear();
                 self.state.playlist_length = 0;
                 self.update_cache(cache);
+                let _ = reply.send(());
             }
             AudioMessage::SetPlaylist { tracks } => {
                 self.playlist.clear();

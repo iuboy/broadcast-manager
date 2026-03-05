@@ -1,3 +1,5 @@
+#![allow(clippy::module_inception)]
+
 //! 音频混音器模块
 //!
 //! 提供：

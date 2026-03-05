@@ -237,7 +237,7 @@ mod tests {
                 // 验证样本值在有效范围内
                 for &sample in &data {
                     assert!(
-                        sample >= -1.0 && sample <= 1.0,
+                        (-1.0..=1.0).contains(&sample),
                         "Sample {} out of range",
                         sample
                     );

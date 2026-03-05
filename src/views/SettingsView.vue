@@ -40,6 +40,57 @@
           <span class="form-tip">同时连接的客户端数量上限</span>
         </el-form-item>
 
+        <el-divider />
+
+        <el-form-item label="启用白名单">
+          <el-switch
+            v-model="serverConfig.whitelist_enabled"
+            active-text="已启用"
+            inactive-text="已禁用"
+            style="--el-switch-on-color: #13ce66; --el-switch-off-color: #dcdfe6"
+          />
+          <span class="form-tip">只允许白名单中的客户端发起广播请求</span>
+        </el-form-item>
+
+        <el-form-item v-if="serverConfig.whitelist_enabled" label="白名单地址">
+          <div class="whitelist-container">
+            <div class="whitelist-input">
+              <el-input
+                v-model="newWhitelistAddress"
+                placeholder="输入 IP 地址（如：192.168.1.100）"
+                @keyup.enter="addWhitelistAddress"
+              />
+              <el-button
+                type="primary"
+                @click="addWhitelistAddress"
+                :disabled="!newWhitelistAddress.trim()"
+              >
+                添加
+              </el-button>
+            </div>
+            <div class="whitelist-list">
+              <el-tag
+                v-for="(addr, index) in serverConfig.whitelist_addresses"
+                :key="index"
+                closable
+                @close="removeWhitelistAddress(index)"
+                class="whitelist-tag"
+              >
+                {{ addr }}
+              </el-tag>
+              <el-empty
+                v-if="serverConfig.whitelist_addresses.length === 0"
+                description="暂无白名单地址"
+                :image-size="60"
+              />
+            </div>
+            <div class="whitelist-hint">
+              <el-icon><InfoFilled /></el-icon>
+              <span>环回地址（127.0.0.1, ::1, localhost）总是被允许，无需添加</span>
+            </div>
+          </div>
+        </el-form-item>
+
         <el-form-item>
           <el-button type="primary" @click="saveConfig" :loading="saving">
             保存配置
@@ -110,7 +161,7 @@
 <script setup lang="ts">
 import { ref, reactive, onMounted } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Connection, Warning, Setting } from '@element-plus/icons-vue'
+import { Connection, Warning, Setting, InfoFilled } from '@element-plus/icons-vue'
 import { tauriClient, type ServerConfig } from '../composables/useTauriCommands'
 
 // 服务器配置
@@ -118,7 +169,12 @@ const serverConfig = reactive<ServerConfig>({
   bind_address: '0.0.0.0',
   port: 8081,
   max_connections: 10,
+  whitelist_enabled: false,
+  whitelist_addresses: [],
 })
+
+// 白名单输入
+const newWhitelistAddress = ref('')
 
 // 状态
 const saving = ref(false)
@@ -208,6 +264,67 @@ async function toggleAutostart() {
   return true // 允许开关切换
 }
 
+// 白名单管理
+function addWhitelistAddress() {
+  const addr = newWhitelistAddress.value.trim()
+  if (!addr) {
+    return
+  }
+
+  // 验证 IP 地址格式
+  if (addr !== '0.0.0.0' &&
+      addr !== 'localhost' &&
+      !isValidIpAddress(addr)) {
+    ElMessage.error('请输入有效的 IP 地址')
+    return
+  }
+
+  // 检查是否已存在
+  if (serverConfig.whitelist_addresses.includes(addr)) {
+    ElMessage.warning('该地址已在白名单中')
+    return
+  }
+
+  serverConfig.whitelist_addresses.push(addr)
+  newWhitelistAddress.value = ''
+  ElMessage.success('已添加白名单地址')
+}
+
+function removeWhitelistAddress(index: number) {
+  serverConfig.whitelist_addresses.splice(index, 1)
+  ElMessage.success('已移除白名单地址')
+}
+
+function isValidIpAddress(addr: string): boolean {
+  // 简单的 IP 地址验证
+  const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/
+  const ipv6Regex = /^([0-9a-fA-F]{0,4}:){7}[0-9a-fA-F]{0,4}$/
+
+  if (ipv4Regex.test(addr)) {
+    // 检查每个部分是否在 0-255 范围内
+    const parts = addr.split('.')
+    return parts.every(part => {
+      const num = parseInt(part, 10)
+      return num >= 0 && num <= 255
+    })
+  }
+
+  if (ipv6Regex.test(addr)) {
+    return true
+  }
+
+  // 支持 IP 段格式（如 192.168.1.）
+  if (addr.endsWith('.') && addr.split('.').length === 4) {
+    const parts = addr.slice(0, -1).split('.')
+    return parts.every(part => {
+      const num = parseInt(part, 10)
+      return !isNaN(num) && num >= 0 && num <= 255
+    })
+  }
+
+  return false
+}
+
 // 初始化
 onMounted(() => {
   loadConfig()
@@ -261,5 +378,50 @@ onMounted(() => {
 .warning-text {
   color: #f56c6c;
   margin-top: 10px;
+}
+
+.whitelist-container {
+  width: 100%;
+}
+
+.whitelist-input {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.whitelist-input .el-input {
+  flex: 1;
+}
+
+.whitelist-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 40px;
+  padding: 10px;
+  background: #f5f7fa;
+  border-radius: 4px;
+  margin-bottom: 10px;
+}
+
+.whitelist-tag {
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.whitelist-hint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #e7f3ff;
+  border-left: 3px solid #409eff;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #606266;
+}
+
+.whitelist-hint .el-icon {
+  color: #409eff;
 }
 </style>

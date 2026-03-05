@@ -62,6 +62,10 @@ export interface ServerConfig {
   bind_address: string
   port: number
   max_connections: number
+  /** 白名单是否启用 */
+  whitelist_enabled: boolean
+  /** 允许的客户端 IP 地址列表 */
+  whitelist_addresses: string[]
 }
 
 // ===== Tauri 命令客户端 =====

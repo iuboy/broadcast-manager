@@ -7,11 +7,15 @@
 //! - 音频回调线程（消费者）：从环形缓冲区读取 -> 输出到扬声器
 
 use std::cell::UnsafeCell;
+use std::sync::atomic::{AtomicU64, Ordering};
 use ringbuf::traits::*;
 
 use super::broadcast::{AudioCodec, BroadcastEngine};
 use crate::audio::decoder::opus::{OpusConfig, OpusDecoderEngine};
 use crate::error::{AudioError, AudioResult};
+
+/// 全局音频样本丢弃计数（用于监控缓冲区溢出）
+static DROPPED_SAMPLES: AtomicU64 = AtomicU64::new(0);
 
 /// 无锁广播引擎（线程安全包装器）
 ///
@@ -51,6 +55,7 @@ impl BroadcastConsumer {
     /// 1. 没有其他线程同时访问此消费者的可变引用
     /// 2. 在 SPSC 模式下，只有一个生产者和一个消费者
     #[inline]
+    #[allow(clippy::mut_from_ref)]
     fn get(&self) -> &mut ringbuf::HeapCons<f32> {
         // SAFETY: 在音频回调中，只有一个线程（音频回调线程）会调用此方法
         // 在 SPSC 环形缓冲区中，消费者只被一个线程访问
@@ -175,11 +180,25 @@ impl BroadcastEngineLockFree {
 
         match self.codec {
             AudioCodec::Pcm => {
+                let mut dropped_in_call = 0;
                 for chunk in data.chunks(2) {
                     if chunk.len() == 2 {
                         let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
                         let normalized = (sample as f32 / i16::MAX as f32) * volume;
-                        let _ = self.producer.try_push(normalized);
+                        if self.producer.try_push(normalized).is_err() {
+                            dropped_in_call += 1;
+                        }
+                    }
+                }
+                if dropped_in_call > 0 {
+                    let total = DROPPED_SAMPLES.fetch_add(dropped_in_call as u64, Ordering::Relaxed);
+                    // 每丢弃约 10000 个样本记录一次警告（约 100ms @ 48kHz）
+                    if total % 10000 < dropped_in_call as u64 {
+                        tracing::warn!(
+                            "音频缓冲区溢出：已丢弃 {} 个样本（约 {:.2} 秒音频）",
+                            total,
+                            total as f64 / 48000.0
+                        );
                     }
                 }
                 Ok(())
@@ -188,9 +207,22 @@ impl BroadcastEngineLockFree {
                 if let Some(ref mut decoder) = self.opus_decoder {
                     match decoder.decode(data) {
                         Ok(samples) => {
+                            let mut dropped_in_call = 0;
                             for sample in samples {
                                 let scaled = sample * volume;
-                                let _ = self.producer.try_push(scaled);
+                                if self.producer.try_push(scaled).is_err() {
+                                    dropped_in_call += 1;
+                                }
+                            }
+                            if dropped_in_call > 0 {
+                                let total = DROPPED_SAMPLES.fetch_add(dropped_in_call as u64, Ordering::Relaxed);
+                                if total % 10000 < dropped_in_call as u64 {
+                                    tracing::warn!(
+                                        "音频缓冲区溢出：已丢弃 {} 个样本（约 {:.2} 秒音频）",
+                                        total,
+                                        total as f32 / 48000.0
+                                    );
+                                }
                             }
                             Ok(())
                         }

@@ -5,7 +5,7 @@ import vue from "@vitejs/plugin-vue";
 const host = process.env.TAURI_DEV_HOST;
 
 // https://vite.dev/config/
-export default defineConfig(async () => ({
+export default defineConfig({
   plugins: [vue()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
@@ -29,4 +29,17 @@ export default defineConfig(async () => ({
       ignored: ["**/src-tauri/**"],
     },
   },
-}));
+
+  // Vitest 配置
+  test: {
+    globals: true,
+    environment: "happy-dom",
+    include: ["src/**/*.{test,spec}.{js,ts,vue}"],
+    exclude: ["node_modules", "dist", "src-tauri"],
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "json", "html"],
+      exclude: ["node_modules/", "src-tauri/", "**/*.d.ts"],
+    },
+  },
+});

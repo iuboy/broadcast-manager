@@ -304,6 +304,7 @@ impl MusicEngine {
     ///
     /// # 返回
     /// 实际读取的样本数（每声道）
+    #[allow(clippy::needless_range_loop)]
     pub fn read_samples(&self, output: &mut [f32]) -> usize {
         let mut inner = self.inner.lock();
 
@@ -341,7 +342,7 @@ impl MusicEngine {
         // 如果缓冲区不足，从解码器读取更多
         while samples_written < output.len() {
             // 检查是否需要加载下一首
-            let needs_next = inner.decoder.is_none() || inner.decoder.as_ref().map_or(true, |d| d.is_finished());
+            let needs_next = inner.decoder.is_none() || inner.decoder.as_ref().is_none_or(|d| d.is_finished());
 
             if needs_next {
                 // 尝试加载下一首

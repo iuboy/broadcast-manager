@@ -25,10 +25,10 @@ pub enum AudioCodec {
 /// 跨线程通信通过 crossbeam-channel 实现。
 ///
 /// # 架构
-/// ```
+///
 /// 网络线程 --crossbeam-channel--> Actor 线程 --> 广播引擎 --> 音频线程
 ///                                      (无锁)
-/// ```
+///
 pub struct BroadcastEngine {
     /// 编解码格式
     codec: AudioCodec,
@@ -214,6 +214,7 @@ impl BroadcastEngine {
     }
 
     /// 读取音频样本
+    #[allow(clippy::needless_range_loop)]
     pub fn read_samples(&mut self, output: &mut [f32]) -> usize {
         let samples_to_read = output.len().min(self.pcm_buffer.len());
 
