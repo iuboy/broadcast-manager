@@ -30,7 +30,7 @@ jobs:
       - name: Install dependencies (macOS)
         if: startsWith(matrix.os, 'macos')
         run: |
-          brew install opus
+          brew install opus glib
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
