@@ -14,8 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 use super::ducker::AudioDucker;
-use crate::audio::{MixerControl, broadcast_consumer};
-use crate::audio::engine::{MusicEngine, read_from_ringbuf, BroadcastConsumer};
+use crate::audio::engine::{read_from_ringbuf, BroadcastConsumer, MusicEngine};
+use crate::audio::{broadcast_consumer, MixerControl};
 use crate::error::{AudioError, AudioResult};
 
 /// 线性插值重采样器
@@ -120,7 +120,7 @@ impl AudioMixer {
 
         let sample_format = supported_config.sample_format();
         let config: StreamConfig = supported_config.into();
-        let output_sample_rate = config.sample_rate.0;  // 使用系统默认采样率
+        let output_sample_rate = config.sample_rate.0; // 使用系统默认采样率
 
         tracing::info!(
             "音频输出设备: {}, 采样率: {} (系统默认), 声道: {}",
@@ -151,7 +151,15 @@ impl AudioMixer {
                 device.build_output_stream::<f32, _, _>(
                     &config,
                     move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                        Self::mix_audio_f32(data, &mixer_control_clone, &consumer_clone, &music_clone, &ducker_clone, output_sample_rate, output_channels);
+                        Self::mix_audio_f32(
+                            data,
+                            &mixer_control_clone,
+                            &consumer_clone,
+                            &music_clone,
+                            &ducker_clone,
+                            output_sample_rate,
+                            output_channels,
+                        );
                     },
                     err_fn,
                     None,
@@ -165,7 +173,15 @@ impl AudioMixer {
                 device.build_output_stream::<i16, _, _>(
                     &config,
                     move |data: &mut [i16], _: &cpal::OutputCallbackInfo| {
-                        Self::mix_audio_i16(data, &mixer_control_clone, &consumer_clone, &music_clone, &ducker_clone, output_sample_rate, output_channels);
+                        Self::mix_audio_i16(
+                            data,
+                            &mixer_control_clone,
+                            &consumer_clone,
+                            &music_clone,
+                            &ducker_clone,
+                            output_sample_rate,
+                            output_channels,
+                        );
                     },
                     err_fn,
                     None,
@@ -179,14 +195,25 @@ impl AudioMixer {
                 device.build_output_stream::<u16, _, _>(
                     &config,
                     move |data: &mut [u16], _: &cpal::OutputCallbackInfo| {
-                        Self::mix_audio_u16(data, &mixer_control_clone, &consumer_clone, &music_clone, &ducker_clone, output_sample_rate, output_channels);
+                        Self::mix_audio_u16(
+                            data,
+                            &mixer_control_clone,
+                            &consumer_clone,
+                            &music_clone,
+                            &ducker_clone,
+                            output_sample_rate,
+                            output_channels,
+                        );
                     },
                     err_fn,
                     None,
                 )
             }
             format => {
-                return Err(AudioError::DeviceInit(format!("不支持的采样格式: {:?}", format)));
+                return Err(AudioError::DeviceInit(format!(
+                    "不支持的采样格式: {:?}",
+                    format
+                )));
             }
         }
         .map_err(|e| AudioError::Playback(format!("无法创建音频流: {}", e)))?;
@@ -239,7 +266,9 @@ impl AudioMixer {
         let broadcast_frames_needed = if broadcast_sample_rate == output_sample_rate {
             output_frames
         } else {
-            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64)).ceil() as usize + 100
+            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64))
+                .ceil() as usize
+                + 100
         };
 
         // 从无锁环形缓冲区读取广播音频（单声道）
@@ -249,7 +278,12 @@ impl AudioMixer {
         // 重采样到目标采样率（仍然是单声道）
         let mut broadcast_mono = vec![0.0f32; output_frames];
         if broadcast_sample_rate != output_sample_rate {
-            resample_linear(&raw_broadcast_buffer, broadcast_sample_rate, output_sample_rate, &mut broadcast_mono);
+            resample_linear(
+                &raw_broadcast_buffer,
+                broadcast_sample_rate,
+                output_sample_rate,
+                &mut broadcast_mono,
+            );
         } else {
             let copy_len = actually_read.min(output_frames);
             broadcast_mono[..copy_len].copy_from_slice(&raw_broadcast_buffer[..copy_len]);
@@ -312,7 +346,9 @@ impl AudioMixer {
         let broadcast_frames_needed = if broadcast_sample_rate == output_sample_rate {
             output_frames
         } else {
-            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64)).ceil() as usize + 100
+            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64))
+                .ceil() as usize
+                + 100
         };
 
         // 从无锁环形缓冲区读取广播音频（单声道）
@@ -322,9 +358,15 @@ impl AudioMixer {
         // 重采样到目标采样率（仍然是单声道）
         let mut broadcast_mono = vec![0.0f32; output_frames];
         if broadcast_sample_rate != output_sample_rate {
-            resample_linear(&raw_broadcast_buffer, broadcast_sample_rate, output_sample_rate, &mut broadcast_mono);
+            resample_linear(
+                &raw_broadcast_buffer,
+                broadcast_sample_rate,
+                output_sample_rate,
+                &mut broadcast_mono,
+            );
         } else {
-            broadcast_mono[..actually_read.min(output_frames)].copy_from_slice(&raw_broadcast_buffer[..actually_read.min(output_frames)]);
+            broadcast_mono[..actually_read.min(output_frames)]
+                .copy_from_slice(&raw_broadcast_buffer[..actually_read.min(output_frames)]);
         }
 
         // 将单声道广播数据转换为输出声道数
@@ -385,7 +427,9 @@ impl AudioMixer {
         let broadcast_frames_needed = if broadcast_sample_rate == output_sample_rate {
             output_frames
         } else {
-            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64)).ceil() as usize + 100
+            ((output_frames as f64) * (broadcast_sample_rate as f64 / output_sample_rate as f64))
+                .ceil() as usize
+                + 100
         };
 
         // 从无锁环形缓冲区读取广播音频（单声道）
@@ -395,9 +439,15 @@ impl AudioMixer {
         // 重采样到目标采样率（仍然是单声道）
         let mut broadcast_mono = vec![0.0f32; output_frames];
         if broadcast_sample_rate != output_sample_rate {
-            resample_linear(&raw_broadcast_buffer, broadcast_sample_rate, output_sample_rate, &mut broadcast_mono);
+            resample_linear(
+                &raw_broadcast_buffer,
+                broadcast_sample_rate,
+                output_sample_rate,
+                &mut broadcast_mono,
+            );
         } else {
-            broadcast_mono[..actually_read.min(output_frames)].copy_from_slice(&raw_broadcast_buffer[..actually_read.min(output_frames)]);
+            broadcast_mono[..actually_read.min(output_frames)]
+                .copy_from_slice(&raw_broadcast_buffer[..actually_read.min(output_frames)]);
         }
 
         // 将单声道广播数据转换为输出声道数

@@ -3,8 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::Write;
 
-
-
 /// 日志级别配置
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -168,7 +166,7 @@ pub struct BroadcastConfig {
 impl Default for BroadcastConfig {
     fn default() -> Self {
         Self {
-            sample_rate: 44100,  // 改为 44100Hz 以兼容大多数设备
+            sample_rate: 44100, // 改为 44100Hz 以兼容大多数设备
             channels: 1,
             codec: "pcm".to_string(),
         }

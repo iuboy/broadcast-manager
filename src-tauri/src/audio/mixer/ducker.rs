@@ -85,11 +85,8 @@ impl AudioDucker {
                     } else {
                         let progress = elapsed as f32 / duration as f32;
                         // 使用对数插值实现平滑过渡
-                        self.current_volume = self.interpolate_log(
-                            self.fade_from_volume,
-                            self.duck_volume,
-                            progress,
-                        );
+                        self.current_volume =
+                            self.interpolate_log(self.fade_from_volume, self.duck_volume, progress);
                     }
                 }
             }

@@ -11,5 +11,5 @@ mod broadcast;
 mod broadcast_lockfree;
 mod music;
 
-pub use broadcast_lockfree::{BroadcastEngineLockFree, BroadcastConsumer, read_from_ringbuf};
+pub use broadcast_lockfree::{read_from_ringbuf, BroadcastConsumer, BroadcastEngineLockFree};
 pub use music::{DuckingConfig, MusicEngine};

@@ -6,9 +6,9 @@
 //! - Actor 线程（生产者）：解码音频数据 -> 写入环形缓冲区
 //! - 音频回调线程（消费者）：从环形缓冲区读取 -> 输出到扬声器
 
+use ringbuf::traits::*;
 use std::cell::UnsafeCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use ringbuf::traits::*;
 
 use super::broadcast::{AudioCodec, BroadcastEngine};
 use crate::audio::decoder::opus::{OpusConfig, OpusDecoderEngine};
@@ -131,7 +131,12 @@ impl BroadcastEngineLockFree {
         };
 
         let engine = BroadcastEngine::new(sample_rate, channels, codec);
-        tracing::info!("广播引擎创建: {}Hz {}ch {:?}", sample_rate, channels, audio_codec);
+        tracing::info!(
+            "广播引擎创建: {}Hz {}ch {:?}",
+            sample_rate,
+            channels,
+            audio_codec
+        );
 
         Self {
             engine,
@@ -168,7 +173,9 @@ impl BroadcastEngineLockFree {
         let (producer, consumer) = ringbuf.split();
 
         let engine = Self::new_with_producer(sample_rate, channels, codec, producer);
-        let broadcast_consumer = BroadcastConsumer { consumer: UnsafeCell::new(consumer) };
+        let broadcast_consumer = BroadcastConsumer {
+            consumer: UnsafeCell::new(consumer),
+        };
 
         (engine, broadcast_consumer)
     }
@@ -191,7 +198,8 @@ impl BroadcastEngineLockFree {
                     }
                 }
                 if dropped_in_call > 0 {
-                    let total = DROPPED_SAMPLES.fetch_add(dropped_in_call as u64, Ordering::Relaxed);
+                    let total =
+                        DROPPED_SAMPLES.fetch_add(dropped_in_call as u64, Ordering::Relaxed);
                     // 每丢弃约 10000 个样本记录一次警告（约 100ms @ 48kHz）
                     if total % 10000 < dropped_in_call as u64 {
                         tracing::warn!(
@@ -215,7 +223,8 @@ impl BroadcastEngineLockFree {
                                 }
                             }
                             if dropped_in_call > 0 {
-                                let total = DROPPED_SAMPLES.fetch_add(dropped_in_call as u64, Ordering::Relaxed);
+                                let total = DROPPED_SAMPLES
+                                    .fetch_add(dropped_in_call as u64, Ordering::Relaxed);
                                 if total % 10000 < dropped_in_call as u64 {
                                     tracing::warn!(
                                         "音频缓冲区溢出：已丢弃 {} 个样本（约 {:.2} 秒音频）",
@@ -239,7 +248,13 @@ impl BroadcastEngineLockFree {
     }
 
     /// 重新配置
-    pub fn reconfigure(&mut self, codec: &str, sample_rate: u32, channels: u16, buffer_capacity_ms: usize) -> BroadcastConsumer {
+    pub fn reconfigure(
+        &mut self,
+        codec: &str,
+        sample_rate: u32,
+        channels: u16,
+        buffer_capacity_ms: usize,
+    ) -> BroadcastConsumer {
         let new_codec = match codec.to_lowercase().as_str() {
             "opus" => AudioCodec::Opus,
             _ => AudioCodec::Pcm,
@@ -274,7 +289,9 @@ impl BroadcastEngineLockFree {
 
         tracing::info!("广播引擎重新配置: {} {}Hz", codec, sample_rate);
 
-        BroadcastConsumer { consumer: UnsafeCell::new(consumer) }
+        BroadcastConsumer {
+            consumer: UnsafeCell::new(consumer),
+        }
     }
 
     /// 设置音量

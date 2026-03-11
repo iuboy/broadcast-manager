@@ -15,7 +15,9 @@ pub mod mixer;
 pub mod playlist;
 
 // 从 actor 模块重导出
-pub use actor::{AudioActor, AudioMessage, AudioState, PlaybackProgress, PlaylistItemDto, MixerControl};
+pub use actor::{
+    AudioActor, AudioMessage, AudioState, MixerControl, PlaybackProgress, PlaylistItemDto,
+};
 
 // 从 actor 模块导出广播消费者
 pub use actor::{broadcast_consumer, broadcast_sample_rate};

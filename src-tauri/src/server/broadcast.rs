@@ -188,10 +188,7 @@ impl BroadcastManager {
 
     /// 验证客户端是否是当前广播者
     pub fn is_broadcaster(&self, client_id: &str) -> bool {
-        self.current_broadcaster
-            .read()
-            .as_deref()
-            == Some(client_id)
+        self.current_broadcaster.read().as_deref() == Some(client_id)
     }
 
     /// 原子检查：客户端是否正在广播（防止竞态条件）
@@ -234,11 +231,11 @@ mod tests {
     #[test]
     fn test_add_client() {
         let manager = BroadcastManager::new(2);
-        
+
         let id1 = manager.add_client();
         assert!(id1.is_ok());
         assert_eq!(manager.client_count(), 1);
-        
+
         let id2 = manager.add_client();
         assert!(id2.is_ok());
         assert_eq!(manager.client_count(), 2);
@@ -247,10 +244,10 @@ mod tests {
     #[test]
     fn test_max_connections() {
         let manager = BroadcastManager::new(2);
-        
+
         let _id1 = manager.add_client().unwrap();
         let _id2 = manager.add_client().unwrap();
-        
+
         let id3 = manager.add_client();
         assert!(id3.is_err());
         assert!(id3.unwrap_err().contains("最大连接数"));
@@ -259,11 +256,11 @@ mod tests {
     #[test]
     fn test_remove_client() {
         let manager = BroadcastManager::new(10);
-        
+
         let id = manager.add_client().unwrap();
         assert_eq!(manager.client_count(), 1);
         assert!(manager.has_client(&id));
-        
+
         manager.remove_client(&id);
         assert_eq!(manager.client_count(), 0);
         assert!(!manager.has_client(&id));
@@ -273,7 +270,7 @@ mod tests {
     fn test_request_broadcast_success() {
         let manager = BroadcastManager::new(10);
         let id = manager.add_client().unwrap();
-        
+
         let result = manager.request_broadcast(&id);
         assert!(result.is_ok());
         assert!(manager.is_broadcasting());
@@ -285,9 +282,9 @@ mod tests {
         let manager = BroadcastManager::new(10);
         let id1 = manager.add_client().unwrap();
         let id2 = manager.add_client().unwrap();
-        
+
         manager.request_broadcast(&id1).unwrap();
-        
+
         let result = manager.request_broadcast(&id2);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("已有客户端正在广播"));
@@ -296,7 +293,7 @@ mod tests {
     #[test]
     fn test_request_broadcast_nonexistent_client() {
         let manager = BroadcastManager::new(10);
-        
+
         let result = manager.request_broadcast("nonexistent");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("客户端不存在"));
@@ -306,10 +303,10 @@ mod tests {
     fn test_end_broadcast() {
         let manager = BroadcastManager::new(10);
         let id = manager.add_client().unwrap();
-        
+
         manager.request_broadcast(&id).unwrap();
         assert!(manager.is_broadcasting());
-        
+
         manager.end_broadcast(&id);
         assert!(!manager.is_broadcasting());
         assert_eq!(manager.current_broadcaster(), None);
@@ -320,9 +317,9 @@ mod tests {
         let manager = BroadcastManager::new(10);
         let id1 = manager.add_client().unwrap();
         let id2 = manager.add_client().unwrap();
-        
+
         manager.request_broadcast(&id1).unwrap();
-        
+
         assert!(manager.is_broadcaster(&id1));
         assert!(!manager.is_broadcaster(&id2));
     }
@@ -331,7 +328,7 @@ mod tests {
     fn test_update_activity() {
         let manager = BroadcastManager::new(10);
         let id = manager.add_client().unwrap();
-        
+
         // This test mainly verifies the method exists and doesn't panic
         manager.update_activity(&id);
         assert!(manager.has_client(&id));
@@ -340,10 +337,10 @@ mod tests {
     #[test]
     fn test_get_client_ids() {
         let manager = BroadcastManager::new(10);
-        
+
         let id1 = manager.add_client().unwrap();
         let id2 = manager.add_client().unwrap();
-        
+
         let ids = manager.get_client_ids();
         assert_eq!(ids.len(), 2);
         assert!(ids.contains(&id1));
@@ -354,12 +351,12 @@ mod tests {
     fn test_broadcast_duration() {
         let manager = BroadcastManager::new(10);
         let id = manager.add_client().unwrap();
-        
+
         // Initially no duration
         assert!(manager.broadcast_duration_secs().is_none());
-        
+
         manager.request_broadcast(&id).unwrap();
-        
+
         // After broadcast starts, we should have a duration
         let duration = manager.broadcast_duration_secs();
         assert!(duration.is_some());
@@ -378,15 +375,15 @@ mod tests {
         let manager = BroadcastManager::new(10);
         let id1 = manager.add_client().unwrap();
         let id2 = manager.add_client().unwrap();
-        
+
         // First broadcast
         manager.request_broadcast(&id1).unwrap();
         assert_eq!(manager.current_broadcaster(), Some(id1.clone()));
-        
+
         // End first broadcast
         manager.end_broadcast(&id1);
         assert_eq!(manager.current_broadcaster(), None);
-        
+
         // Second broadcast
         manager.request_broadcast(&id2).unwrap();
         assert_eq!(manager.current_broadcaster(), Some(id2));

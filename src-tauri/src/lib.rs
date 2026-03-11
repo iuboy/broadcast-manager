@@ -241,7 +241,10 @@ fn set_ducking_enabled(enabled: bool) {
 fn add_track(path: String) {
     use crossbeam_channel::unbounded;
     let (reply_tx, reply_rx) = unbounded();
-    audio().send(AudioMessage::AddTrack { path, reply: reply_tx });
+    audio().send(AudioMessage::AddTrack {
+        path,
+        reply: reply_tx,
+    });
     // 等待消息处理完成，然后保存配置
     let _ = reply_rx.recv_timeout(std::time::Duration::from_secs(1));
     save_playlist_to_config();
@@ -252,7 +255,10 @@ fn add_track(path: String) {
 fn remove_track(index: usize) {
     use crossbeam_channel::unbounded;
     let (reply_tx, reply_rx) = unbounded();
-    audio().send(AudioMessage::RemoveTrack { index, reply: reply_tx });
+    audio().send(AudioMessage::RemoveTrack {
+        index,
+        reply: reply_tx,
+    });
     // 等待消息处理完成，然后保存配置
     let _ = reply_rx.recv_timeout(std::time::Duration::from_secs(1));
     save_playlist_to_config();
@@ -364,9 +370,10 @@ fn update_server_config(config_dto: ServerConfigDto) -> Result<(), String> {
         return Err("绑定地址不能为空".to_string());
     }
     // 尝试解析为 IP 地址
-    if config_dto.bind_address != "0.0.0.0" &&
-       config_dto.bind_address != "localhost" &&
-       config_dto.bind_address.parse::<std::net::IpAddr>().is_err() {
+    if config_dto.bind_address != "0.0.0.0"
+        && config_dto.bind_address != "localhost"
+        && config_dto.bind_address.parse::<std::net::IpAddr>().is_err()
+    {
         return Err(format!("无效的绑定地址: {}", config_dto.bind_address));
     }
 
@@ -376,9 +383,7 @@ fn update_server_config(config_dto: ServerConfigDto) -> Result<(), String> {
             return Err("白名单地址不能为空".to_string());
         }
         // 尝试解析为 IP 地址或检查是否为 localhost
-        if addr != "localhost" &&
-           addr != "0.0.0.0" &&
-           addr.parse::<std::net::IpAddr>().is_err() {
+        if addr != "localhost" && addr != "0.0.0.0" && addr.parse::<std::net::IpAddr>().is_err() {
             return Err(format!("无效的白名单地址: {}", addr));
         }
     }
@@ -389,7 +394,8 @@ fn update_server_config(config_dto: ServerConfigDto) -> Result<(), String> {
         c.server.max_connections = config_dto.max_connections;
         c.server.client_whitelist.enabled = config_dto.whitelist_enabled;
         c.server.client_whitelist.allowed_addresses = config_dto.whitelist_addresses;
-    }).map_err(|e| e.to_string())
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// 重置所有配置为默认值
@@ -435,7 +441,8 @@ async fn disable_autostart(app: tauri::AppHandle) -> Result<(), String> {
 /// 检查开机自启动状态
 #[tauri::command]
 async fn is_autostart_enabled(app: tauri::AppHandle) -> Result<bool, String> {
-    let enabled = app.autolaunch()
+    let enabled = app
+        .autolaunch()
         .is_enabled()
         .map_err(|e: tauri_plugin_autostart::Error| e.to_string())?;
     Ok(enabled)
@@ -486,8 +493,8 @@ pub fn run() {
     // 从配置读取日志级别，支持环境变量 RUST_LOG 覆盖
     let config = crate::config::Config::load().unwrap_or_default();
     let log_level: tracing::Level = config.server.log_level.into();
-    let env_filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive(log_level.into());
+    let env_filter =
+        tracing_subscriber::EnvFilter::from_default_env().add_directive(log_level.into());
 
     // 控制台层
     let console_layer = tracing_subscriber::fmt::layer()
@@ -531,8 +538,13 @@ pub fn run() {
                                     let path = entry.path();
                                     let path_str = path.to_string_lossy();
                                     // 只删除 .log 或 .log.* 文件
-                                    if path.extension().map(|s| s.to_string_lossy()).unwrap_or_default() == "log" ||
-                                       path_str.ends_with(".log") {
+                                    if path
+                                        .extension()
+                                        .map(|s| s.to_string_lossy())
+                                        .unwrap_or_default()
+                                        == "log"
+                                        || path_str.ends_with(".log")
+                                    {
                                         let _ = std::fs::remove_file(&path);
                                         tracing::info!("清理过期日志文件: {:?}", path);
                                     }
@@ -664,7 +676,8 @@ async fn start_embedded_server(
         .with_state(state);
 
     // 绑定地址
-    let addr: SocketAddr = format!("{}:{}", config.server.bind_address, config.server.port).parse()?;
+    let addr: SocketAddr =
+        format!("{}:{}", config.server.bind_address, config.server.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
 
     tracing::info!("服务器启动在 http://{} (WebSocket: ws://{}/ws)", addr, addr);

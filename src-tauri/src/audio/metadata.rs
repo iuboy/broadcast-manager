@@ -2,12 +2,12 @@
 //!
 //! 使用 symphonia 库读取音频时长，使用 lofty 库读取 ID3/元数据标签。
 
+use rodio::Decoder;
+use rodio::Source;
 use std::fs::File;
 use std::io::BufReader;
 use std::path::Path;
 use std::time::Duration;
-use rodio::Decoder;
-use rodio::Source;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
@@ -44,12 +44,14 @@ fn get_audio_duration_from_metadata(path: &Path) -> Option<f64> {
         hint.with_extension(ext);
     }
 
-    let probed = get_probe().format(
-        &hint,
-        mss,
-        &FormatOptions::default(),
-        &MetadataOptions::default(),
-    ).ok()?;
+    let probed = get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .ok()?;
 
     let format = probed.format;
 
@@ -97,7 +99,11 @@ fn get_audio_duration_by_decoding(path: &Path) -> Option<f64> {
 
     // 计算时长 = 总样本数 / (采样率 * 声道数)
     let duration = total_samples as f64 / (sample_rate * channels);
-    tracing::info!("解码完成，时长: {:.2} 秒 ({} 样本)", duration, total_samples);
+    tracing::info!(
+        "解码完成，时长: {:.2} 秒 ({} 样本)",
+        duration,
+        total_samples
+    );
     Some(duration)
 }
 
@@ -150,7 +156,10 @@ pub fn read_audio_metadata(path: &Path) -> AudioMetadata {
 
     if let Ok(tagged_file) = lofty::read_from_path(path) {
         // 获取主要标签（primary_tag）或第一个标签（first_tag）
-        if let Some(tag) = tagged_file.primary_tag().or_else(|| tagged_file.first_tag()) {
+        if let Some(tag) = tagged_file
+            .primary_tag()
+            .or_else(|| tagged_file.first_tag())
+        {
             // 使用 Accessor trait 的方法来读取标签信息
             if let Some(title) = tag.title() {
                 if !title.is_empty() {
@@ -172,8 +181,13 @@ pub fn read_audio_metadata(path: &Path) -> AudioMetadata {
         }
     }
 
-    tracing::debug!("元数据读取完成: title={:?}, artist={:?}, album={:?}, duration={:?}",
-        metadata.title, metadata.artist, metadata.album, metadata.duration_secs);
+    tracing::debug!(
+        "元数据读取完成: title={:?}, artist={:?}, album={:?}, duration={:?}",
+        metadata.title,
+        metadata.artist,
+        metadata.album,
+        metadata.duration_secs
+    );
 
     metadata
 }

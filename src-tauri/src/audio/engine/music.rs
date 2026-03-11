@@ -78,8 +78,8 @@ impl AudioDecoder {
         })?;
 
         let reader = BufReader::new(file);
-        let decoder = Decoder::new(reader)
-            .map_err(|e| AudioError::Decode(format!("无法解码文件: {}", e)))?;
+        let decoder =
+            Decoder::new(reader).map_err(|e| AudioError::Decode(format!("无法解码文件: {}", e)))?;
 
         // 获取源音频参数
         let source_sample_rate = decoder.sample_rate();
@@ -105,7 +105,8 @@ impl AudioDecoder {
         // 需要读取的源样本数（考虑采样率转换）
         let source_samples_needed = if self.source_sample_rate != TARGET_SAMPLE_RATE {
             // 简单的线性插值重采样
-            (target_samples as f64 * self.source_sample_rate as f64 / TARGET_SAMPLE_RATE as f64).ceil() as usize
+            (target_samples as f64 * self.source_sample_rate as f64 / TARGET_SAMPLE_RATE as f64)
+                .ceil() as usize
         } else {
             target_samples
         };
@@ -135,7 +136,8 @@ impl AudioDecoder {
         }
 
         // 声道转换和重采样
-        if self.source_channels == TARGET_CHANNELS && self.source_sample_rate == TARGET_SAMPLE_RATE {
+        if self.source_channels == TARGET_CHANNELS && self.source_sample_rate == TARGET_SAMPLE_RATE
+        {
             // 直接复制
             let copy_len = source_idx.min(output.len());
             output[..copy_len].copy_from_slice(&source_buffer[..copy_len]);
@@ -145,7 +147,9 @@ impl AudioDecoder {
             let mono_samples = source_idx;
             for i in 0..target_samples {
                 let src_idx = if self.source_sample_rate != TARGET_SAMPLE_RATE {
-                    ((i as f64 * self.source_sample_rate as f64 / TARGET_SAMPLE_RATE as f64) as usize).min(mono_samples - 1)
+                    ((i as f64 * self.source_sample_rate as f64 / TARGET_SAMPLE_RATE as f64)
+                        as usize)
+                        .min(mono_samples - 1)
                 } else {
                     i.min(mono_samples - 1)
                 };
@@ -153,7 +157,7 @@ impl AudioDecoder {
                 let sample = source_buffer[src_idx];
                 let out_idx = i * 2;
                 if out_idx + 1 < output.len() {
-                    output[out_idx] = sample;     // 左声道
+                    output[out_idx] = sample; // 左声道
                     output[out_idx + 1] = sample; // 右声道
                     samples_read += 1;
                 }
@@ -162,7 +166,9 @@ impl AudioDecoder {
             // 立体声 + 重采样
             for i in 0..target_samples {
                 let src_idx = if self.source_sample_rate != TARGET_SAMPLE_RATE {
-                    ((i as f64 * self.source_sample_rate as f64 / TARGET_SAMPLE_RATE as f64) as usize).min(source_idx / 2 - 1)
+                    ((i as f64 * self.source_sample_rate as f64 / TARGET_SAMPLE_RATE as f64)
+                        as usize)
+                        .min(source_idx / 2 - 1)
                 } else {
                     i
                 };
@@ -181,7 +187,8 @@ impl AudioDecoder {
                 let out_idx = i * TARGET_CHANNELS as usize;
                 if out_idx + 1 < output.len() {
                     output[out_idx] = source_buffer[i * self.source_channels as usize % source_idx];
-                    output[out_idx + 1] = source_buffer[(i * self.source_channels as usize + 1) % source_idx];
+                    output[out_idx + 1] =
+                        source_buffer[(i * self.source_channels as usize + 1) % source_idx];
                     samples_read += 1;
                 }
             }
@@ -342,7 +349,8 @@ impl MusicEngine {
         // 如果缓冲区不足，从解码器读取更多
         while samples_written < output.len() {
             // 检查是否需要加载下一首
-            let needs_next = inner.decoder.is_none() || inner.decoder.as_ref().is_none_or(|d| d.is_finished());
+            let needs_next =
+                inner.decoder.is_none() || inner.decoder.as_ref().is_none_or(|d| d.is_finished());
 
             if needs_next {
                 // 尝试加载下一首
@@ -377,7 +385,9 @@ impl MusicEngine {
                         samples_written += 1;
                     } else {
                         // 缓冲区已满，存入内部缓冲区
-                        inner.sample_buffer.push_back(temp_buffer[i] * effective_volume);
+                        inner
+                            .sample_buffer
+                            .push_back(temp_buffer[i] * effective_volume);
                     }
                 }
             }
@@ -425,13 +435,14 @@ impl MusicEngine {
             let total_duration_secs = metadata::get_audio_duration(&item.path);
             tracing::info!("获取到的音频时长: {:?}", total_duration_secs);
 
-            let total_duration_samples = total_duration_secs
-                .map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
+            let total_duration_samples =
+                total_duration_secs.map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
 
             match AudioDecoder::from_file(&item.path) {
                 Ok(mut decoder) => {
                     // 使用元数据中的时长，如果获取不到则尝试从解码器获取
-                    inner.total_samples = total_duration_samples.or_else(|| decoder.total_duration());
+                    inner.total_samples =
+                        total_duration_samples.or_else(|| decoder.total_duration());
                     // 重置播放位置
                     inner.position_samples = 0;
                     inner.decoder = Some(decoder);
@@ -440,7 +451,12 @@ impl MusicEngine {
 
                     if let Some(total) = inner.total_samples {
                         let duration_secs = total as f64 / TARGET_SAMPLE_RATE as f64;
-                        tracing::info!("开始播放: {} ({}) - 时长: {:.2}秒", item.title, item.id, duration_secs);
+                        tracing::info!(
+                            "开始播放: {} ({}) - 时长: {:.2}秒",
+                            item.title,
+                            item.id,
+                            duration_secs
+                        );
                     } else {
                         tracing::info!("开始播放: {} ({})", item.title, item.id);
                     }
@@ -480,12 +496,13 @@ impl MusicEngine {
 
                 // 尝试获取音频总时长
                 let total_duration_secs = metadata::get_audio_duration(&item.path);
-                let total_duration_samples = total_duration_secs
-                    .map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
+                let total_duration_samples =
+                    total_duration_secs.map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
 
                 match AudioDecoder::from_file(&item.path) {
                     Ok(mut decoder) => {
-                        inner.total_samples = total_duration_samples.or_else(|| decoder.total_duration());
+                        inner.total_samples =
+                            total_duration_samples.or_else(|| decoder.total_duration());
                         inner.position_samples = 0;
                         inner.decoder = Some(decoder);
                         *self.current_track_id.write() = Some(item.id.clone());
@@ -493,7 +510,11 @@ impl MusicEngine {
 
                         if let Some(total) = inner.total_samples {
                             let duration_secs = total as f64 / TARGET_SAMPLE_RATE as f64;
-                            tracing::info!("开始播放: {} - 时长: {:.2}秒", item.title, duration_secs);
+                            tracing::info!(
+                                "开始播放: {} - 时长: {:.2}秒",
+                                item.title,
+                                duration_secs
+                            );
                         } else {
                             tracing::info!("开始播放: {}", item.title);
                         }
@@ -520,12 +541,13 @@ impl MusicEngine {
 
                 // 尝试获取音频总时长
                 let total_duration_secs = metadata::get_audio_duration(&item.path);
-                let total_duration_samples = total_duration_secs
-                    .map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
+                let total_duration_samples =
+                    total_duration_secs.map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
 
                 match AudioDecoder::from_file(&item.path) {
                     Ok(mut decoder) => {
-                        inner.total_samples = total_duration_samples.or_else(|| decoder.total_duration());
+                        inner.total_samples =
+                            total_duration_samples.or_else(|| decoder.total_duration());
                         inner.position_samples = 0; // 重置播放位置
                         inner.decoder = Some(decoder);
                         inner.state = MusicState::Playing;
@@ -534,7 +556,11 @@ impl MusicEngine {
 
                         if let Some(total) = inner.total_samples {
                             let duration_secs = total as f64 / TARGET_SAMPLE_RATE as f64;
-                            tracing::info!("开始播放: {} - 时长: {:.2}秒", item.title, duration_secs);
+                            tracing::info!(
+                                "开始播放: {} - 时长: {:.2}秒",
+                                item.title,
+                                duration_secs
+                            );
                         } else {
                             tracing::info!("开始播放: {}", item.title);
                         }
@@ -573,12 +599,13 @@ impl MusicEngine {
 
             // 尝试获取音频总时长
             let total_duration_secs = metadata::get_audio_duration(&item.path);
-            let total_duration_samples = total_duration_secs
-                .map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
+            let total_duration_samples =
+                total_duration_secs.map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
 
             match AudioDecoder::from_file(&item.path) {
                 Ok(mut decoder) => {
-                    inner.total_samples = total_duration_samples.or_else(|| decoder.total_duration());
+                    inner.total_samples =
+                        total_duration_samples.or_else(|| decoder.total_duration());
                     inner.position_samples = 0; // 重置播放位置
                     inner.decoder = Some(decoder);
                     inner.state = MusicState::Playing; // 确保状态为播放
@@ -614,12 +641,13 @@ impl MusicEngine {
 
             // 尝试获取音频总时长
             let total_duration_secs = metadata::get_audio_duration(&item.path);
-            let total_duration_samples = total_duration_secs
-                .map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
+            let total_duration_samples =
+                total_duration_secs.map(|secs| (secs * TARGET_SAMPLE_RATE as f64) as u64);
 
             match AudioDecoder::from_file(&item.path) {
                 Ok(mut decoder) => {
-                    inner.total_samples = total_duration_samples.or_else(|| decoder.total_duration());
+                    inner.total_samples =
+                        total_duration_samples.or_else(|| decoder.total_duration());
                     inner.position_samples = 0; // 重置播放位置
                     inner.decoder = Some(decoder);
                     inner.state = MusicState::Playing; // 确保状态为播放
@@ -809,7 +837,9 @@ impl MusicEngine {
     /// 如果未知（需要从元数据获取），返回 None
     pub fn duration(&self) -> Option<f64> {
         let inner = self.inner.lock();
-        inner.total_samples.map(|s| (s as f64) / (TARGET_SAMPLE_RATE as f64))
+        inner
+            .total_samples
+            .map(|s| (s as f64) / (TARGET_SAMPLE_RATE as f64))
     }
 
     /// 获取播放进度百分比 (0.0 - 1.0)

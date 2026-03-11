@@ -119,7 +119,7 @@ fn default_codec() -> String {
 }
 
 fn default_sample_rate() -> u32 {
-    44100  // 改为 44100Hz 以兼容大多数设备
+    44100 // 改为 44100Hz 以兼容大多数设备
 }
 
 fn default_channels() -> u16 {
@@ -141,7 +141,10 @@ impl WsParams {
     pub fn validate(&self) -> Result<(), String> {
         // 验证编解码格式
         if !matches!(self.codec.to_lowercase().as_str(), "pcm" | "opus") {
-            return Err(format!("不支持的编解码格式: {}，支持: pcm, opus", self.codec));
+            return Err(format!(
+                "不支持的编解码格式: {}，支持: pcm, opus",
+                self.codec
+            ));
         }
 
         // 验证采样率
@@ -154,7 +157,10 @@ impl WsParams {
 
         // 验证声道数
         if ![1, 2].contains(&self.channels) {
-            return Err(format!("不支持的声道数: {}，支持: 1（单声道）, 2（立体声）", self.channels));
+            return Err(format!(
+                "不支持的声道数: {}，支持: 1（单声道）, 2（立体声）",
+                self.channels
+            ));
         }
 
         Ok(())
@@ -250,7 +256,11 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
     let mut rate_limiter = RateLimiter::new();
 
     // 消息处理循环
-    tracing::info!("客户端 {} 进入消息循环，将在 {} 秒后检查超时", client_id, HEARTBEAT_INTERVAL_SECS);
+    tracing::info!(
+        "客户端 {} 进入消息循环，将在 {} 秒后检查超时",
+        client_id,
+        HEARTBEAT_INTERVAL_SECS
+    );
 
     // 添加调试：检查 receiver 是否正常工作
     tracing::info!("客户端 {} receiver 准备就绪", client_id);
@@ -260,8 +270,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
         tracing::debug!("客户端 {} 等待下一条消息...", client_id);
         let msg = tokio::time::timeout(
             Duration::from_secs(HEARTBEAT_INTERVAL_SECS),
-            receiver.next()
-        ).await;
+            receiver.next(),
+        )
+        .await;
 
         tracing::debug!("客户端 {} 收到事件: {:?}", client_id, msg);
 
@@ -288,13 +299,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
                         match text.as_str() {
                             "start_broadcast" => {
                                 // 请求开始广播
-                                tracing::info!("客户端 {} (IP: {}) 请求开始广播", client_id, client_ip);
+                                tracing::info!(
+                                    "客户端 {} (IP: {}) 请求开始广播",
+                                    client_id,
+                                    client_ip
+                                );
 
                                 // 检查客户端 IP 是否在白名单中
                                 if !crate::is_client_allowed(&client_ip) {
                                     tracing::warn!(
                                         "客户端 {} (IP: {}) 不在白名单中，拒绝广播请求",
-                                        client_id, client_ip
+                                        client_id,
+                                        client_ip
                                     );
                                     let _ = sender.send(send_error("客户端地址不在白名单中")).await;
                                     break;
@@ -312,16 +328,13 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
                                 };
 
                                 // 使用客户端请求的采样率（这样服务端和客户端完全匹配）
-                                tracing::info!(
-                                    "使用客户端采样率: {}Hz",
-                                    params.sample_rate
-                                );
+                                tracing::info!("使用客户端采样率: {}Hz", params.sample_rate);
 
                                 // 根据客户端采样率重新配置广播引擎
                                 crate::audio().reconfigure_broadcast(
                                     actual_codec,
-                                    params.sample_rate,  // 使用客户端请求的采样率
-                                    params.channels
+                                    params.sample_rate, // 使用客户端请求的采样率
+                                    params.channels,
                                 );
 
                                 match state.broadcast_manager.request_broadcast(&client_id) {
@@ -329,10 +342,18 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
                                         is_broadcasting = true;
                                         // 通知 Audio Actor 开始闪避
                                         crate::audio().start_ducking();
-                                        tracing::info!("客户端 {} 开始广播，发送 broadcasting 响应", client_id);
-                                        match sender.send(Message::Text("broadcasting".to_string())).await {
+                                        tracing::info!(
+                                            "客户端 {} 开始广播，发送 broadcasting 响应",
+                                            client_id
+                                        );
+                                        match sender
+                                            .send(Message::Text("broadcasting".to_string()))
+                                            .await
+                                        {
                                             Ok(()) => tracing::info!("broadcasting 响应发送成功"),
-                                            Err(e) => tracing::error!("broadcasting 响应发送失败: {}", e),
+                                            Err(e) => {
+                                                tracing::error!("broadcasting 响应发送失败: {}", e)
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -342,7 +363,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
                                 }
                             }
                             "stop_broadcast" => {
-                                tracing::warn!("==================== STOP_BROADCAST 开始 ====================");
+                                tracing::warn!(
+                                    "==================== STOP_BROADCAST 开始 ===================="
+                                );
                                 // 结束广播
                                 state.broadcast_manager.end_broadcast(&client_id);
                                 is_broadcasting = false;
@@ -351,7 +374,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
                                 crate::audio().stop_ducking();
                                 tracing::warn!("客户端 {} 已发送停止闪避请求", client_id);
                                 let _ = sender.send(Message::Text("idle".to_string())).await;
-                                tracing::warn!("==================== STOP_BROADCAST 结束 ====================");
+                                tracing::warn!(
+                                    "==================== STOP_BROADCAST 结束 ===================="
+                                );
                             }
                             "heartbeat" => {
                                 // 心跳响应
@@ -367,20 +392,31 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
                     Message::Binary(data) => {
                         // 检查数据包大小，防止 DoS 攻击
                         if data.len() > MAX_AUDIO_PACKET_SIZE {
-                            tracing::warn!("客户端 {} 发送过大数据包: {} 字节，超过限制 {} 字节，断开连接",
-                                client_id, data.len(), MAX_AUDIO_PACKET_SIZE);
+                            tracing::warn!(
+                                "客户端 {} 发送过大数据包: {} 字节，超过限制 {} 字节，断开连接",
+                                client_id,
+                                data.len(),
+                                MAX_AUDIO_PACKET_SIZE
+                            );
                             let _ = sender.send(send_error("数据包过大")).await;
                             break;
                         }
 
-                        tracing::debug!("客户端 {} 收到二进制数据: {} 字节, is_broadcasting={}",
-                            client_id, data.len(), is_broadcasting);
+                        tracing::debug!(
+                            "客户端 {} 收到二进制数据: {} 字节, is_broadcasting={}",
+                            client_id,
+                            data.len(),
+                            is_broadcasting
+                        );
                         if is_broadcasting {
                             // 通过 Audio Actor 推送音频数据
                             crate::audio().push_broadcast_bytes(data);
                         } else {
-                            tracing::warn!("客户端 {} 发送音频数据但未在广播状态，丢弃 {} 字节",
-                                client_id, data.len());
+                            tracing::warn!(
+                                "客户端 {} 发送音频数据但未在广播状态，丢弃 {} 字节",
+                                client_id,
+                                data.len()
+                            );
                         }
                     }
                     Message::Ping(data) => {
@@ -415,7 +451,9 @@ async fn handle_socket(socket: WebSocket, state: AppState, params: WsParams, cli
     }
 
     // 清理 - 总是尝试停止闪避，确保状态一致
-    let was_broadcasting = state.broadcast_manager.is_broadcasting_and_broadcaster(&client_id);
+    let was_broadcasting = state
+        .broadcast_manager
+        .is_broadcasting_and_broadcaster(&client_id);
 
     if was_broadcasting {
         tracing::info!("客户端 {} 断开，停止广播和闪避", client_id);

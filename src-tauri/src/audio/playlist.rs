@@ -21,7 +21,6 @@ pub enum PlayMode {
     Shuffle,
 }
 
-
 /// 播放列表项
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlaylistItem {
@@ -41,8 +40,7 @@ impl PlaylistItem {
         Self {
             id: Uuid::new_v4().to_string(),
             title: audio_metadata.title.unwrap_or_else(|| {
-                path
-                    .file_stem()
+                path.file_stem()
                     .and_then(|s| s.to_str())
                     .unwrap_or("Unknown")
                     .to_string()

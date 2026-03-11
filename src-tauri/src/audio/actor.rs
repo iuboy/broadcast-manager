@@ -3,7 +3,7 @@
 //! 将音频子系统封装为独立的 Actor，通过消息传递进行通信。
 //! 解决 cpal::Stream 非 Send 的问题，在专用线程中运行音频系统。
 
-use crossbeam_channel::{Receiver, RecvTimeoutError, Sender, unbounded};
+use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
-use super::engine::{BroadcastEngineLockFree, BroadcastConsumer, DuckingConfig, MusicEngine};
+use super::engine::{BroadcastConsumer, BroadcastEngineLockFree, DuckingConfig, MusicEngine};
 use super::mixer::AudioMixer;
 use super::playlist::{Playlist, PlaylistItem};
 use crate::config::Config;
@@ -19,7 +19,8 @@ use ringbuf::traits::Split;
 
 /// 全局广播音频缓冲区消费者（音频回调线程使用）
 /// 使用 RwLock 实现安全的线程间共享
-static BROADCAST_CONSUMER: parking_lot::RwLock<Option<Arc<BroadcastConsumer>>> = parking_lot::RwLock::new(None);
+static BROADCAST_CONSUMER: parking_lot::RwLock<Option<Arc<BroadcastConsumer>>> =
+    parking_lot::RwLock::new(None);
 
 /// 全局广播采样率（用于重采样）
 static BROADCAST_SAMPLE_RATE: parking_lot::RwLock<u32> = parking_lot::RwLock::new(44100);
@@ -46,7 +47,9 @@ pub fn broadcast_consumer() -> Arc<BroadcastConsumer> {
             tracing::error!("广播消费者未初始化");
             let ringbuf = ringbuf::HeapRb::<f32>::new(1);
             let (_prod, consumer) = ringbuf.split();
-            Arc::new(BroadcastConsumer { consumer: std::cell::UnsafeCell::new(consumer) })
+            Arc::new(BroadcastConsumer {
+                consumer: std::cell::UnsafeCell::new(consumer),
+            })
         }
     }
 }
@@ -93,7 +96,10 @@ pub enum AudioMessage {
     /// 上一首
     PreviousTrack,
     /// 播放指定 ID 的曲目
-    PlayTrackById { id: String, reply: Sender<Result<(), String>> },
+    PlayTrackById {
+        id: String,
+        reply: Sender<Result<(), String>>,
+    },
 
     // === 音量控制 ===
     /// 设置音乐音量 (0.0 - 1.0)
@@ -139,7 +145,11 @@ pub enum AudioMessage {
     /// 推送广播音频数据 (字节)
     BroadcastBytes { data: Vec<u8> },
     /// 重新配置广播引擎
-    ReconfigureBroadcast { codec: String, sample_rate: u32, channels: u16 },
+    ReconfigureBroadcast {
+        codec: String,
+        sample_rate: u32,
+        channels: u16,
+    },
 
     // === 生命周期 ===
     /// 关闭 Actor
@@ -256,7 +266,8 @@ impl AudioActor {
             tracing::error!(
                 "发送消息到音频 Actor 失败: 消息类型={:?}, 错误={:?}. \
                  这通常意味着音频 Actor 已崩溃或关闭。请重启应用。",
-                msg_type, e
+                msg_type,
+                e
             );
         }
     }
@@ -274,7 +285,8 @@ impl AudioActor {
             return self.get_state(); // 回退到缓存状态
         }
 
-        reply_rx.recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
+        reply_rx
+            .recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
             .unwrap_or_else(|e| {
                 match e {
                     RecvTimeoutError::Timeout => {
@@ -296,7 +308,8 @@ impl AudioActor {
             return Vec::new();
         }
 
-        reply_rx.recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
+        reply_rx
+            .recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
             .unwrap_or_else(|e| {
                 tracing::warn!("查询播放列表失败: {:?}", e);
                 Vec::new()
@@ -354,7 +367,8 @@ impl AudioActor {
             return Err(format!("无法发送播放命令，音频系统可能无响应: {}", e));
         }
 
-        reply_rx.recv_timeout(Duration::from_millis(5000))
+        reply_rx
+            .recv_timeout(Duration::from_millis(5000))
             .map_err(|e| format!("播放请求超时或音频系统已断开: {}", e))?
     }
 
@@ -420,18 +434,26 @@ impl AudioActor {
 
     /// 重新配置广播引擎
     pub fn reconfigure_broadcast(&self, codec: String, sample_rate: u32, channels: u16) {
-        self.send(AudioMessage::ReconfigureBroadcast { codec, sample_rate, channels });
+        self.send(AudioMessage::ReconfigureBroadcast {
+            codec,
+            sample_rate,
+            channels,
+        });
     }
 
     /// 获取播放列表项
     pub fn get_playlist_items(&self) -> Vec<PlaylistItemDto> {
         let (reply_tx, reply_rx) = unbounded();
-        if let Err(e) = self.tx.send(AudioMessage::GetPlaylistItems { reply: reply_tx }) {
+        if let Err(e) = self
+            .tx
+            .send(AudioMessage::GetPlaylistItems { reply: reply_tx })
+        {
             tracing::error!("查询播放列表项失败，无法发送请求: {:?}", e);
             return Vec::new();
         }
 
-        reply_rx.recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
+        reply_rx
+            .recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
             .unwrap_or_else(|e| {
                 tracing::warn!("查询播放列表项失败: {:?}", e);
                 Vec::new()
@@ -441,7 +463,10 @@ impl AudioActor {
     /// 获取播放进度
     pub fn get_playback_progress(&self) -> PlaybackProgress {
         let (reply_tx, reply_rx) = unbounded();
-        if let Err(e) = self.tx.send(AudioMessage::GetPlaybackProgress { reply: reply_tx }) {
+        if let Err(e) = self
+            .tx
+            .send(AudioMessage::GetPlaybackProgress { reply: reply_tx })
+        {
             tracing::error!("查询播放进度失败，无法发送请求: {:?}", e);
             return PlaybackProgress {
                 position: 0.0,
@@ -450,7 +475,8 @@ impl AudioActor {
             };
         }
 
-        reply_rx.recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
+        reply_rx
+            .recv_timeout(Duration::from_millis(QUERY_TIMEOUT_MS))
             .unwrap_or_else(|e| {
                 tracing::warn!("查询播放进度失败: {:?}", e);
                 PlaybackProgress {
@@ -465,7 +491,9 @@ impl AudioActor {
     pub fn set_play_mode(&self, mode: &str) -> Result<(), String> {
         match mode {
             "sequential" | "loop" | "single_loop" | "shuffle" => {
-                self.send(AudioMessage::SetPlayMode { mode: mode.to_string() });
+                self.send(AudioMessage::SetPlayMode {
+                    mode: mode.to_string(),
+                });
                 Ok(())
             }
             _ => Err(format!("无效的播放模式: {}", mode)),
@@ -482,7 +510,8 @@ impl AudioActor {
             return Err(format!("无法发送扫描命令，音频系统可能无响应: {}", e));
         }
 
-        reply_rx.recv_timeout(Duration::from_secs(30)) // 扫描可能需要更长时间
+        reply_rx
+            .recv_timeout(Duration::from_secs(30)) // 扫描可能需要更长时间
             .map_err(|e| format!("扫描目录请求失败: {}", e))
     }
 
@@ -720,7 +749,10 @@ impl AudioActorCore {
                 self.music_engine.stop_ducking();
                 self.state.is_ducking = false;
                 self.mixer_control.lock().is_ducking = false;
-                tracing::info!("Audio Actor 已停止闪避，is_ducking = {}", self.state.is_ducking);
+                tracing::info!(
+                    "Audio Actor 已停止闪避，is_ducking = {}",
+                    self.state.is_ducking
+                );
                 self.update_cache(cache);
             }
             AudioMessage::SetDuckingEnabled(enabled) => {
@@ -814,7 +846,12 @@ impl AudioActorCore {
                             if let Ok(file_type) = entry.file_type() {
                                 if file_type.is_file() {
                                     if let Some(ext) = entry.path().extension() {
-                                        if ext == "mp3" || ext == "wav" || ext == "flac" || ext == "ogg" || ext == "m4a" {
+                                        if ext == "mp3"
+                                            || ext == "wav"
+                                            || ext == "flac"
+                                            || ext == "ogg"
+                                            || ext == "m4a"
+                                        {
                                             let item = PlaylistItem::from_path(entry.path());
                                             self.playlist.add(item);
                                             added += 1;
@@ -826,7 +863,11 @@ impl AudioActorCore {
                         self.state.playlist_length = self.playlist.len();
                         self.update_cache(cache);
                         if skipped > 0 {
-                            tracing::info!("扫描目录完成: 添加 {} 个文件，跳过 {} 个", added, skipped);
+                            tracing::info!(
+                                "扫描目录完成: 添加 {} 个文件，跳过 {} 个",
+                                added,
+                                skipped
+                            );
                         }
                         added
                     }
@@ -843,16 +884,15 @@ impl AudioActorCore {
             // === 广播数据 ===
             AudioMessage::BroadcastData { samples } => {
                 // 将 i16 样本转换为字节
-                let bytes: Vec<u8> = samples.iter()
-                    .flat_map(|s| s.to_le_bytes())
-                    .collect();
+                let bytes: Vec<u8> = samples.iter().flat_map(|s| s.to_le_bytes()).collect();
                 if let Err(e) = self.broadcast_engine.receive_pcm(&bytes) {
                     tracing::warn!("广播数据接收失败: {}", e);
                 }
             }
             AudioMessage::BroadcastDataF32 { samples } => {
                 // 将 f32 样本转换为 i16 再转换为字节
-                let bytes: Vec<u8> = samples.iter()
+                let bytes: Vec<u8> = samples
+                    .iter()
                     .flat_map(|s| ((*s * i16::MAX as f32) as i16).to_le_bytes())
                     .collect();
                 if let Err(e) = self.broadcast_engine.receive_pcm(&bytes) {
@@ -864,12 +904,18 @@ impl AudioActorCore {
                     tracing::warn!("广播数据处理失败: {}", e);
                 }
             }
-            AudioMessage::ReconfigureBroadcast { codec, sample_rate, channels } => {
+            AudioMessage::ReconfigureBroadcast {
+                codec,
+                sample_rate,
+                channels,
+            } => {
                 tracing::info!("重新配置广播: {}Hz", sample_rate);
                 // 更新全局广播采样率（用于混音器重采样）
                 set_broadcast_sample_rate(sample_rate);
                 // 重新配置广播引擎并获取新的消费者
-                let consumer = self.broadcast_engine.reconfigure(&codec, sample_rate, channels, 500);
+                let consumer =
+                    self.broadcast_engine
+                        .reconfigure(&codec, sample_rate, channels, 500);
                 // 更新全局消费者（可以多次更新）
                 set_broadcast_consumer(Arc::new(consumer));
             }
@@ -886,7 +932,9 @@ impl AudioActorCore {
                 }
             }
             AudioMessage::GetPlaylist { reply } => {
-                let tracks: Vec<String> = self.playlist.items()
+                let tracks: Vec<String> = self
+                    .playlist
+                    .items()
                     .iter()
                     .map(|t| t.path.to_string_lossy().to_string())
                     .collect();
@@ -895,7 +943,9 @@ impl AudioActorCore {
                 }
             }
             AudioMessage::GetPlaylistItems { reply } => {
-                let items: Vec<PlaylistItemDto> = self.playlist.items()
+                let items: Vec<PlaylistItemDto> = self
+                    .playlist
+                    .items()
                     .into_iter()
                     .map(PlaylistItemDto::from)
                     .collect();

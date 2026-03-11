@@ -16,7 +16,10 @@ pub struct OpusConfig {
 impl OpusConfig {
     /// 创建新的 Opus 配置
     pub fn new(sample_rate: u32, channels: u16) -> Self {
-        Self { sample_rate, channels }
+        Self {
+            sample_rate,
+            channels,
+        }
     }
 }
 
@@ -34,48 +37,49 @@ mod opus_impl {
 
     impl OpusDecoderEngine {
         pub fn new(config: OpusConfig) -> AudioResult<Self> {
-                let channels = match config.channels {
-                    1 => Channels::Mono,
-                    2 => Channels::Stereo,
-                    _ => {
-                        return Err(AudioError::Init(
-                            format!(
-                                "不支持的声道数: {}，Opus 仅支持 1(单声道) 或 2(立体声)",
-                                config.channels
-                            )
-                        ));
-                    }
-                };
+            let channels = match config.channels {
+                1 => Channels::Mono,
+                2 => Channels::Stereo,
+                _ => {
+                    return Err(AudioError::Init(format!(
+                        "不支持的声道数: {}，Opus 仅支持 1(单声道) 或 2(立体声)",
+                        config.channels
+                    )));
+                }
+            };
 
-                let decoder = Decoder::new(config.sample_rate, channels)
-                    .map_err(|e| AudioError::Init(format!("Opus 解码器初始化失败: {}", e)))?;
+            let decoder = Decoder::new(config.sample_rate, channels)
+                .map_err(|e| AudioError::Init(format!("Opus 解码器初始化失败: {}", e)))?;
 
-                Ok(Self { decoder })
-            }
+            Ok(Self { decoder })
+        }
 
         /// 解码 Opus 数据为 PCM f32
         pub fn decode(&mut self, data: &[u8]) -> AudioResult<Vec<f32>> {
-                // Opus 最大帧大小
-                const MAX_FRAME_SIZE: usize = 5760;
+            // Opus 最大帧大小
+            const MAX_FRAME_SIZE: usize = 5760;
 
-                let mut output = vec![0i16; MAX_FRAME_SIZE];
-                let samples = self
-                    .decoder
-                    .decode(data, &mut output, false)
-                    .map_err(|e| AudioError::Decode(format!("Opus 解码失败: {}", e)))?;
+            let mut output = vec![0i16; MAX_FRAME_SIZE];
+            let samples = self
+                .decoder
+                .decode(data, &mut output, false)
+                .map_err(|e| AudioError::Decode(format!("Opus 解码失败: {}", e)))?;
 
-                // 将 i16 转换为 f32
-                Ok(output[..samples * 2].iter().map(|&s| s as f32 / i16::MAX as f32).collect())
-            }
+            // 将 i16 转换为 f32
+            Ok(output[..samples * 2]
+                .iter()
+                .map(|&s| s as f32 / i16::MAX as f32)
+                .collect())
+        }
 
         /// 重置解码器状态
         pub fn reset(&mut self) -> AudioResult<()> {
-                // opus crate 的 Decoder 没有直接的 reset 方法
-                // 这里简单返回 Ok，因为新数据会自动重置状态
-                Ok(())
-            }
+            // opus crate 的 Decoder 没有直接的 reset 方法
+            // 这里简单返回 Ok，因为新数据会自动重置状态
+            Ok(())
         }
     }
+}
 
 #[cfg(not(feature = "opus"))]
 mod opus_stub {
@@ -98,7 +102,7 @@ mod opus_stub {
                  \n3. 重新编译应用程序"
             );
             Err(AudioError::Init(
-                "Opus 支持未启用。请使用 PCM 格式或在编译时启用 'opus' feature".to_string()
+                "Opus 支持未启用。请使用 PCM 格式或在编译时启用 'opus' feature".to_string(),
             ))
         }
 
@@ -341,7 +345,11 @@ mod tests {
             let result = OpusDecoderEngine::new(config);
 
             // 现在应该拒绝无效声道数
-            assert!(result.is_err(), "Decoder should reject invalid channel count: {}", channels);
+            assert!(
+                result.is_err(),
+                "Decoder should reject invalid channel count: {}",
+                channels
+            );
             if let Err(AudioError::Init(msg)) = result {
                 assert!(
                     msg.contains("声道") || msg.contains("channel"),

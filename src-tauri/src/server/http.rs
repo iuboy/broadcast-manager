@@ -3,10 +3,7 @@
 //! 提供简化的 RESTful API，只保留健康检查端点
 //! 所有音频操作已迁移到 Tauri 命令
 
-use axum::{
-    routing::get,
-    Json, Router,
-};
+use axum::{routing::get, Json, Router};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -20,8 +17,7 @@ pub struct AppState {
 
 /// 创建 HTTP 路由（仅保留健康检查）
 pub fn create_http_router() -> Router<AppState> {
-    Router::new()
-        .route("/api/health", get(health_check))
+    Router::new().route("/api/health", get(health_check))
 }
 
 // ===== 状态 API =====

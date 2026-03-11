@@ -70,7 +70,11 @@ impl BroadcastEngine {
         let opus_decoder = if audio_codec == AudioCodec::Opus {
             match OpusDecoderEngine::new(OpusConfig::new(sample_rate, channels)) {
                 Ok(decoder) => {
-                    tracing::info!("Opus 解码器初始化成功 ({}Hz, {} 声道)", sample_rate, channels);
+                    tracing::info!(
+                        "Opus 解码器初始化成功 ({}Hz, {} 声道)",
+                        sample_rate,
+                        channels
+                    );
                     Some(decoder)
                 }
                 Err(e) => {
@@ -106,10 +110,7 @@ impl BroadcastEngine {
         };
 
         // 检查是否需要重新配置
-        if self.codec == new_codec
-            && self.sample_rate == sample_rate
-            && self.channels == channels
-        {
+        if self.codec == new_codec && self.sample_rate == sample_rate && self.channels == channels {
             tracing::debug!("广播引擎配置未变化，执行快速恢复");
             // 快速恢复：保留引擎，只清空缓冲区
             self.clear();
